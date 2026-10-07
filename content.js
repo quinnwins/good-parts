@@ -118,9 +118,12 @@ async function callGemini(content, apiKey, signal) {
   if (!res.ok) {
     console.warn('[Good Parts] Gemini error', res.status, data.error);
     const msg = data.error?.message || '';
-    if (/api key/i.test(msg)) throw new FriendlyError("Your Gemini key isn't working.");
+    if (/api key/i.test(msg)) {
+      chrome.runtime.sendMessage('openOptions');
+      throw new FriendlyError("Your Gemini key isn't working. Paste a new one in the settings tab.");
+    }
     if (res.status === 429) throw new FriendlyError('Gemini is busy or out of free uses for today. Try again later.');
-    throw new FriendlyError("Gemini couldn't watch this video.", res.status >= 500);
+    throw new FriendlyError('Gemini had a problem with this video. Try again in a minute.', res.status >= 500);
   }
   const text = (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
   const parts = cleanParts(JSON.parse(text).parts);
@@ -214,7 +217,7 @@ async function getParts(videoId) {
   const content = transcript
     ? [{ text: transcriptPrompt(title, transcript) }]
     : [{ fileData: { fileUri: `https://www.youtube.com/watch?v=${videoId}` } }, { text: VIDEO_PROMPT }];
-  toast(transcript ? 'Gemini is reading the transcript…' : 'Gemini is watching the video. This can take a minute or two.', GIVE_UP_AFTER);
+  if (!transcript) toast('This video has no captions, so this can take a minute or two.', GIVE_UP_AFTER);
   const parts = await askGemini(content);
   await chrome.storage.local.set({ [cacheKey]: parts });
   return parts;
@@ -347,7 +350,7 @@ function turnOn() {
   follow();
   drawMarkers();
   v.play().catch(() => {});
-  toast(`About ${watch} min instead of ${Math.round(v.duration / 60)}. Best parts at normal speed, the rest at 2x, filler skipped.`, 5000);
+  toast(`About ${watch} min instead of ${Math.round(v.duration / 60)}. Best parts play as usual, the rest at 2x, filler skipped.`, 5000);
 }
 
 function turnOff() {
@@ -364,7 +367,6 @@ async function onButtonClick(e) {
   if (state.busy) return;
   if (state.on) {
     turnOff();
-    toast('Back to the full video.');
     return;
   }
   const id = currentVideoId();
@@ -379,7 +381,7 @@ async function onButtonClick(e) {
       state.parts = parts;
     } catch (err) {
       console.warn('[Good Parts]', err);
-      toast(err instanceof FriendlyError ? err.message : 'Something went wrong. Try again.', 5000);
+      toast(err instanceof FriendlyError ? err.message : 'Something went wrong. Refresh the page and try again.', 5000);
       return;
     } finally {
       state.busy = false;
