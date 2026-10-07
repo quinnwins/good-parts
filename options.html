@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Good Parts settings</title>
+  <style>
+    body { margin: 0; padding: 48px 16px; background: #fafafa; color: #111; font: 16px/1.5 system-ui, sans-serif; }
+    main { max-width: 440px; margin: 0 auto; }
+    h1 { font-size: 24px; margin: 0 0 8px; }
+    label { display: block; margin: 24px 0 6px; font-weight: 600; }
+    input { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid #bbb; border-radius: 8px; font: inherit; }
+    button { margin-top: 12px; padding: 10px 20px; border: 0; border-radius: 8px; background: #1a4fd6; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+    #status { margin-left: 12px; color: #1a4fd6; font-weight: 600; }
+    a { color: #1a4fd6; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Good Parts</h1>
+    <p>Good Parts uses Google's Gemini to watch a video and pick the parts worth your time. It needs a Gemini key to do that.</p>
+    <label for="key">Gemini key</label>
+    <input id="key" type="password" autocomplete="off" spellcheck="false">
+    <button id="save">Save</button><span id="status"></span>
+    <p><a href="https://aistudio.google.com/apikey" target="_blank">Get a free key from Google</a></p>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

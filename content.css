@@ -1,0 +1,73 @@
+.gp-button {
+  flex: 0 0 auto;
+  align-self: center;
+  height: 40px;
+  margin-right: 8px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 20px;
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+  font: 500 14px/40px Roboto, Arial, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.gp-button:hover { background: rgba(0, 0, 0, 0.5); }
+.gp-button.gp-on { background: #ffc83d; color: #111; }
+.gp-button[hidden] { display: none; }
+
+.gp-toast {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  z-index: 70;
+  max-width: 70%;
+  padding: 10px 14px;
+  border-left: 4px solid #ffc83d;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.82);
+  color: #fff;
+  font: 500 15px/1.35 Roboto, Arial, sans-serif;
+  opacity: 0;
+  transform: translateY(-6px);
+  transition: opacity 0.2s, transform 0.2s;
+  pointer-events: none;
+}
+.gp-toast.gp-show { opacity: 1; transform: none; }
+
+/* Hides captions while Good Parts briefly switches them on to read them. */
+.gp-reading .ytp-caption-window-container { display: none !important; }
+
+/* A gold strip just above the progress bar showing which parts will play. */
+.gp-markers {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 4px;
+  margin-bottom: 4px;
+  pointer-events: none;
+}
+.ad-showing .gp-markers { display: none; }
+.gp-marker {
+  position: absolute;
+  border-radius: 2px;
+}
+/* Highlights: full-height gold. Other plays: thinner and pale, so the two differ by shape, not just colour. */
+.gp-highlight { top: 0; bottom: 0; background: #ffc83d; }
+.gp-play { top: 1px; bottom: 1px; background: rgba(255, 255, 255, 0.55); }
+
+/* Shown while a play is fast-forwarding. */
+#movie_player.gp-fast::after {
+  content: "2x";
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  z-index: 70;
+  padding: 6px 12px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.82);
+  color: #fff;
+  font: 600 15px/1.2 Roboto, Arial, sans-serif;
+  pointer-events: none;
+}
