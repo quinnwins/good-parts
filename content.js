@@ -7,11 +7,12 @@ const FREE_CLAUDE = 'https://good-parts.quinnwins.workers.dev';
 const HIGHLIGHTS = 0.25; // Share of the video that plays at the viewer's own speed.
 const SKIPPED = 0.25; // Share of the video skipped at the least, weakest parts first.
 
-const PREFETCH_FROM = 10 * 60; // Long talk videos are what Good Parts is for, so work those out on opening.
+const LONG_VIDEO = 8 * 60; // Only videos this long are worked out early: YouTube allows mid-video ads from 8 min, so talk videos get padded past it.
+const WORK_OUT_AFTER = 30; // Seconds watched before that happens.
 
 // loading: the parts being worked out ({ id, quiet, promise }). openGap: a skipped stretch the viewer went
-// back to on purpose, which plays until the next part. jumpTo: where Good Parts itself last moved the video.
-let state = { videoId: null, parts: null, on: false, busy: false, markersFor: null, baseRate: 1, current: null, loading: null, openGap: null, jumpTo: null };
+// back to on purpose, which plays until the next part.
+let state = { videoId: null, parts: null, on: false, busy: false, markersFor: null, baseRate: 1, current: null, loading: null, openGap: null };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const player = () => document.querySelector('#movie_player');
@@ -84,10 +85,12 @@ function cleanParts(raw) {
 }
 
 // `retry` marks hiccups on the AI's side that are worth asking again about.
+// `settings` marks problems fixed in the settings tab, which a click then opens (a background run never does).
 class FriendlyError extends Error {
-  constructor(message, retry = false) {
+  constructor(message, retry = false, settings = false) {
     super(message);
     this.retry = retry;
+    this.settings = settings;
   }
 }
 
@@ -106,8 +109,7 @@ async function post(name, url, headers, body, signal) {
   if (res.ok) return data;
   console.warn('[Good Parts]', name, 'error', res.status, data.error);
   if (res.status === 401 || res.status === 403 || /api.?key/i.test(JSON.stringify(data.error || ''))) {
-    chrome.runtime.sendMessage('openOptions');
-    throw new FriendlyError(`Your ${name} key isn't working. Paste a new one in the settings tab.`);
+    throw new FriendlyError(`Your ${name} key isn't working. Paste a new one in the settings tab.`, false, true);
   }
   if (res.status === 429) throw new FriendlyError(`${name} is busy or your limit is used up. Try again later.`);
   if (res.status === 409) throw new FriendlyError('This copy of Good Parts is out of date. Ask for the new version.'); // Only the free Claude server sends 409.
@@ -242,15 +244,11 @@ async function readTranscript(videoId) {
   return captionFiles[videoId] ? captionLines(captionFiles[videoId]) : null;
 }
 
-// In a quiet (background) run, a missing key or missing captions stop silently instead of opening settings
-// or sending the whole video to Gemini; the viewer's own click tries again out loud.
+// A background run stops without a word where a click would show something or send the whole video to
+// Gemini (no captions); the viewer's own click then tries again out loud.
 class QuietStop extends Error {}
 
-function needKey(message, quiet) {
-  if (quiet) return new QuietStop(message);
-  chrome.runtime.sendMessage('openOptions');
-  return new FriendlyError(message);
-}
+const needKey = (message) => new FriendlyError(message, false, true);
 
 async function getParts(videoId, quiet) {
   const cacheKey = `parts4:${videoId}`;
@@ -259,7 +257,7 @@ async function getParts(videoId, quiet) {
   const settings = await chrome.storage.local.get(['provider', 'apiKey', 'claudeKey', 'openaiKey']);
   const provider = PROVIDERS[settings.provider] ? settings.provider : 'claude';
   const { name, keyName, free } = PROVIDERS[provider];
-  if (!settings[keyName] && !free) throw needKey(`Add your ${name} key first.`, quiet);
+  if (!settings[keyName] && !free) throw needKey(`Add your ${name} key first.`);
   if (adShowing() && !quiet) toast('Good Parts will start after the ad.', GIVE_UP_AFTER);
   while (adShowing()) await sleep(500); // The player is busy with the ad's captions, not the video's.
   if (quiet && currentVideoId() !== videoId) throw new QuietStop('Moved on to another video.');
@@ -297,15 +295,18 @@ function loadParts(id, quiet = false) {
   return promise;
 }
 
-// Work out a long video's good parts as soon as it opens, so the button can show "Watch in 14 min".
-async function prefetch() {
+// Once someone has watched 30 seconds of a long video (ads don't count), work out its good parts, so the
+// button can show "Watch in 14 min" before they decide. Videos people click away from cost nothing.
+let watching = { id: null, seconds: 0, at: null };
+function noteWatching(v) {
   const id = currentVideoId();
-  if (!id || state.loading?.id === id || (state.parts && state.videoId === id)) return;
-  await sleep(3000); // YouTube sometimes switches captions on by itself about 3 s after a video opens.
-  while (adShowing() && currentVideoId() === id) await sleep(1000);
-  for (let i = 0; i < 20 && !(video()?.duration > 0); i++) await sleep(500); // Length not known yet.
-  const v = video();
-  if (currentVideoId() !== id || !v || !(v.duration >= PREFETCH_FROM)) return;
+  if (!id || adShowing()) return;
+  if (watching.id !== id) watching = { id, seconds: 0, at: null };
+  const step = watching.at === null ? 0 : v.currentTime - watching.at;
+  if (step > 0 && step < 2) watching.seconds += step; // Bigger steps are the viewer jumping ahead.
+  watching.at = v.currentTime;
+  if (watching.seconds < WORK_OUT_AFTER || watching.started || !(v.duration >= LONG_VIDEO) || ready() || state.loading) return;
+  watching.started = true;
   loadParts(id, true).catch((err) => console.info('[Good Parts] not worked out in advance:', err.message));
 }
 
@@ -435,12 +436,6 @@ function setSpeed(rate) {
   if (v && v.playbackRate !== rate) v.playbackRate = rate;
 }
 
-// Moves the video for Good Parts, so onSeeking can tell it apart from the viewer moving it.
-function jump(t) {
-  state.jumpTo = t;
-  video().currentTime = t;
-}
-
 const howLong = (sec) => (sec < 90 ? `${Math.round(sec)} seconds` : `${Math.round(sec / 60)} min`);
 
 // Skip downtime, speed through plays, and play highlights at the viewer's own speed. Speed only changes
@@ -462,7 +457,7 @@ function follow() {
     const next = state.parts.find((p) => p.start > v.currentTime);
     if (next) {
       const from = v.currentTime;
-      jump(next.start);
+      v.currentTime = next.start;
       // Land in the next part here, so its own message can't replace this one and its Undo button.
       state.current = next;
       setSpeed(next.kind === 'play' ? fastSpeed(state.baseRate) : state.baseRate);
@@ -487,24 +482,26 @@ function follow() {
 function watchSkipped(start, end) {
   if (!state.on) return;
   state.openGap = { start, end };
-  jump(start);
+  video().currentTime = start;
   follow();
 }
 
 // The viewer moved the video (dragged the bar, pressed an arrow key). If they landed in a skipped
-// stretch, they want to see it, so it plays instead of being skipped again.
+// stretch, they want to see it, so it plays instead of being skipped again. (Good Parts' own jumps
+// land inside a part, or in a stretch Undo opened, so they come out the same.)
 function onSeeking(e) {
   if (!state.on || e.target !== video() || adShowing()) return;
   const t = e.target.currentTime;
-  const ours = state.jumpTo !== null && Math.abs(t - state.jumpTo) < 1;
-  state.jumpTo = null;
-  if (ours) return;
   const next = state.parts.find((p) => p.start > t);
   state.openGap = partAt(t) ? null : { start: t, end: next ? next.start : e.target.duration };
 }
 
 function onTimeUpdate(e) {
-  if (!state.on || e.target !== video()) return;
+  if (e.target !== video()) return;
+  if (!state.on) {
+    noteWatching(e.target);
+    return;
+  }
   if (adShowing()) {
     // Ads play at their own speed. Pick the right speed again once the video is back.
     if (state.current) {
@@ -534,7 +531,7 @@ function turnOn() {
     return; // onTimeUpdate takes over once the ad ends.
   }
   // Start inside a part, so the next part's own message can't replace the summary below a moment later.
-  if (!partAt(v.currentTime)) jump((state.parts.find((p) => p.start > v.currentTime) || state.parts[0]).start);
+  if (!partAt(v.currentTime)) v.currentTime = (state.parts.find((p) => p.start > v.currentTime) || state.parts[0]).start;
   follow();
   drawMarkers();
   v.play().catch(() => {});
@@ -567,6 +564,7 @@ async function onButtonClick(e) {
       if (currentVideoId() !== id) return; // Moved on to another video while waiting.
     } catch (err) {
       console.warn('[Good Parts]', err);
+      if (err.settings) chrome.runtime.sendMessage('openOptions');
       toast(err instanceof FriendlyError ? err.message : 'Something went wrong. Refresh the page and try again.', 5000);
       return;
     } finally {
@@ -603,7 +601,6 @@ function onNavigate() {
     state.videoId = null;
   }
   ensureButton();
-  prefetch();
 }
 
 document.addEventListener('timeupdate', onTimeUpdate, true); // Media events don't bubble, but capture sees them.
