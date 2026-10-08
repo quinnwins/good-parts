@@ -6,21 +6,44 @@
   <style>
     body { margin: 0; padding: 48px 16px; background: #fafafa; color: #111; font: 16px/1.5 system-ui, sans-serif; }
     main { max-width: 440px; margin: 0 auto; }
-    h1 { font-size: 24px; margin: 0 0 8px; }
-    label { display: block; margin: 24px 0 6px; font-weight: 600; }
-    input { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid #bbb; border-radius: 8px; font: inherit; }
-    button { margin-top: 12px; padding: 10px 20px; border: 0; border-radius: 8px; background: #1a4fd6; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+    fieldset { margin: 24px 0 0; padding: 0; border: 0; }
+    legend, .key label { display: block; margin-bottom: 6px; font-weight: 600; }
+    .choice { display: flex; align-items: center; gap: 8px; margin: 6px 0; font-weight: 400; }
+    .key { margin-top: 20px; }
+    input[type="password"] { box-sizing: border-box; width: 100%; padding: 10px 12px; border: 1px solid #bbb; border-radius: 8px; font: inherit; }
+    .key a { display: inline-block; margin-top: 4px; font-size: 14px; }
+    button { margin-top: 24px; padding: 10px 20px; border: 0; border-radius: 8px; background: #1a4fd6; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
     #status { margin-left: 12px; color: #1a4fd6; font-weight: 600; }
     a { color: #1a4fd6; }
+    .note { margin-top: 20px; font-size: 14px; color: #444; }
   </style>
 </head>
 <body>
   <main>
-    <p>Good Parts sends each video's captions to Google's Gemini to find the best parts. Gemini needs a key.</p>
-    <label for="key">Gemini key</label>
-    <input id="key" type="password" autocomplete="off" spellcheck="false">
+    <p>Good Parts sends each video's captions to the AI you pick to find the best parts.</p>
+    <fieldset>
+      <legend>AI</legend>
+      <label class="choice"><input type="radio" name="provider" value="gemini"> Gemini 3.8 Flash (Google)</label>
+      <label class="choice"><input type="radio" name="provider" value="claude"> Claude Haiku 5.5 (Anthropic)</label>
+      <label class="choice"><input type="radio" name="provider" value="openai"> GPT-6 Luna (OpenAI)</label>
+    </fieldset>
+    <div class="key">
+      <label for="apiKey">Gemini key</label>
+      <input id="apiKey" type="password" autocomplete="off" spellcheck="false">
+      <a href="https://aistudio.google.com/apikey" target="_blank">Get a free key from Google</a>
+    </div>
+    <div class="key">
+      <label for="claudeKey">Claude key</label>
+      <input id="claudeKey" type="password" autocomplete="off" spellcheck="false">
+      <a href="https://platform.claude.com/settings/keys" target="_blank">Get a key from Anthropic</a>
+    </div>
+    <div class="key">
+      <label for="openaiKey">OpenAI key</label>
+      <input id="openaiKey" type="password" autocomplete="off" spellcheck="false">
+      <a href="https://platform.openai.com/api-keys" target="_blank">Get a key from OpenAI</a>
+    </div>
+    <p class="note">Videos without captions always go to Gemini, so keep a Gemini key here.</p>
     <button id="save">Save</button><span id="status"></span>
-    <p><a href="https://aistudio.google.com/apikey" target="_blank">Get a free key from Google</a></p>
   </main>
   <script src="options.js"></script>
 </body>

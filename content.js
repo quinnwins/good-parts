@@ -1,5 +1,4 @@
-const MODEL = 'gemini-3.8-flash';
-const LEAD_IN = 2; // Gemini's starts can land mid-sentence, so begin each part a moment early.
+const LEAD_IN = 2; // The AI's starts can land mid-sentence, so begin each part a moment early.
 const BACKUP_AFTER = 75000;
 const GIVE_UP_AFTER = 180000;
 const FAST = 2; // Speed for the plays between highlights.
@@ -43,6 +42,29 @@ const SCHEMA = {
   required: ['parts'],
 };
 
+// The same answer format for Claude and GPT (Gemini's API spells its schema differently, above).
+const JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['parts'],
+  properties: {
+    parts: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['start', 'end', 'kind', 'label'],
+        properties: {
+          start: { type: 'string' },
+          end: { type: 'string' },
+          kind: { type: 'string', enum: ['highlight', 'play'] },
+          label: { type: 'string', description: 'A few plain words saying what this part covers' },
+        },
+      },
+    },
+  },
+};
+
 let state = { videoId: null, parts: null, on: false, busy: false, markersFor: null, baseRate: 1, current: null };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -55,7 +77,7 @@ function currentVideoId() {
 }
 
 function toSeconds(ts) {
-  // Gemini often copies the transcript's brackets, e.g. "[3:12]".
+  // The AI often copies the transcript's brackets, e.g. "[3:12]".
   const nums = String(ts).replace(/[^\d:.]/g, '').split(':').map(Number);
   return nums.some(Number.isNaN) ? NaN : nums.reduce((total, n) => total * 60 + n, 0);
 }
@@ -92,7 +114,7 @@ function cleanParts(raw) {
   return out;
 }
 
-// `retry` marks hiccups on Google's side that are worth asking again about.
+// `retry` marks hiccups on the AI's side that are worth asking again about.
 class FriendlyError extends Error {
   constructor(message, retry = false) {
     super(message);
@@ -100,48 +122,89 @@ class FriendlyError extends Error {
   }
 }
 
-async function callGemini(content, apiKey, signal) {
-  const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${MODEL}:generateContent`, {
+// One POST to an AI, with its failures turned into messages people can act on.
+async function post(name, url, headers, body, signal) {
+  const res = await fetch(url, {
     signal,
     method: 'POST',
-    headers: { 'content-type': 'application/json', 'x-goog-api-key': apiKey },
-    body: JSON.stringify({
-      contents: [{ parts: content }],
-      // Low thinking answered in ~8 s instead of 20-60 s with the same picks in testing.
-      generationConfig: { thinkingConfig: { thinkingLevel: 'low' }, responseMimeType: 'application/json', responseSchema: SCHEMA },
-    }),
+    headers: { 'content-type': 'application/json', ...headers },
+    body: JSON.stringify(body),
   }).catch((err) => {
-    if (err.name === 'AbortError') throw new FriendlyError('Gemini is taking too long. Try again in a minute.');
-    throw new FriendlyError("Couldn't reach Gemini. Check your internet.", true);
+    if (err.name === 'AbortError') throw new FriendlyError(`${name} is taking too long. Try again in a minute.`);
+    throw new FriendlyError(`Couldn't reach ${name}. Check your internet.`, true);
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    console.warn('[Good Parts] Gemini error', res.status, data.error);
-    const msg = data.error?.message || '';
-    if (/api key/i.test(msg)) {
-      chrome.runtime.sendMessage('openOptions');
-      throw new FriendlyError("Your Gemini key isn't working. Paste a new one in the settings tab.");
-    }
-    if (res.status === 429) throw new FriendlyError('Gemini is busy or out of free uses for today. Try again later.');
-    throw new FriendlyError('Gemini had a problem with this video. Try again in a minute.', res.status >= 500);
+  if (res.ok) return data;
+  console.warn('[Good Parts]', name, 'error', res.status, data.error);
+  if (res.status === 401 || res.status === 403 || /api.?key/i.test(JSON.stringify(data.error || ''))) {
+    chrome.runtime.sendMessage('openOptions');
+    throw new FriendlyError(`Your ${name} key isn't working. Paste a new one in the settings tab.`);
   }
-  const text = (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
-  const parts = cleanParts(JSON.parse(text).parts);
-  if (!parts.length) throw new FriendlyError("Gemini didn't find any parts to keep.");
-  return parts;
+  if (res.status === 429) throw new FriendlyError(`${name} is busy or your limit is used up. Try again later.`);
+  throw new FriendlyError(`${name} had a problem with this video. Try again in a minute.`, res.status >= 500);
 }
 
-// Most answers take 15-60 s, but in testing about 1 in 7 requests stalled or failed on Google's side.
+// Each call takes { text } (a transcript prompt) or, Gemini only, { videoId }, and returns the answer's JSON text.
+async function callGemini({ text, videoId }, key, signal) {
+  const parts = videoId
+    ? [{ fileData: { fileUri: `https://www.youtube.com/watch?v=${videoId}` } }, { text: VIDEO_PROMPT }]
+    : [{ text }];
+  const data = await post('Gemini', 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent', { 'x-goog-api-key': key }, {
+    contents: [{ parts }],
+    // Low thinking answered in ~8 s instead of 20-60 s with the same picks in testing.
+    generationConfig: { thinkingConfig: { thinkingLevel: 'low' }, responseMimeType: 'application/json', responseSchema: SCHEMA },
+  }, signal);
+  return (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
+}
+
+// Raw HTTP like the other two: the extension has no build step to bundle Anthropic's SDK.
+async function callClaude({ text }, key, signal) {
+  const data = await post('Claude', 'https://api.anthropic.com/v1/messages', {
+    'x-api-key': key,
+    'anthropic-version': '2023-06-01',
+    'anthropic-dangerous-direct-browser-access': 'true', // Anthropic only answers requests from a browser page with this.
+  }, {
+    model: 'claude-haiku-5-5',
+    max_tokens: 16000,
+    output_config: { format: { type: 'json_schema', schema: JSON_SCHEMA } },
+    messages: [{ role: 'user', content: text }],
+  }, signal);
+  if (data.stop_reason === 'refusal') throw new FriendlyError('Claude declined this video. Try another AI in settings.');
+  return (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
+}
+
+// Normal reasoning: ~30 s, but its highlights stuck to "about a quarter"; low reasoning marked over half the video.
+async function callOpenAI({ text }, key, signal) {
+  const data = await post('GPT', 'https://api.openai.com/v1/responses', { authorization: `Bearer ${key}` }, {
+    model: 'gpt-6-luna',
+    input: text,
+    text: { format: { type: 'json_schema', name: 'good_parts', schema: JSON_SCHEMA, strict: true } },
+  }, signal);
+  const content = (data.output || []).filter((o) => o.type === 'message').flatMap((o) => o.content || []);
+  if (content.some((c) => c.type === 'refusal')) throw new FriendlyError('GPT declined this video. Try another AI in settings.');
+  return content.filter((c) => c.type === 'output_text').map((c) => c.text).join('');
+}
+
+// Which AI picks the parts (chosen in settings). Only Gemini can watch a video itself, so videos without
+// captions always go to Gemini.
+const PROVIDERS = {
+  gemini: { name: 'Gemini', keyName: 'apiKey', call: callGemini },
+  claude: { name: 'Claude', keyName: 'claudeKey', call: callClaude },
+  openai: { name: 'GPT', keyName: 'openaiKey', call: callOpenAI },
+};
+
+// In testing about 1 in 7 Gemini video requests stalled or failed on Google's side, and some answers take 90+ s.
 // So if the first request errors or is slow, send a backup and use whichever answers first.
-async function askGemini(content) {
-  const { apiKey } = await chrome.storage.local.get('apiKey');
-  if (!apiKey) {
-    chrome.runtime.sendMessage('openOptions');
-    throw new FriendlyError('Add your Gemini key first.');
-  }
+async function askAI(provider, request, key) {
+  const { name, call } = PROVIDERS[provider];
   const controller = new AbortController();
   const giveUp = setTimeout(() => controller.abort(), GIVE_UP_AFTER);
-  const ask = () => callGemini(content, apiKey, controller.signal);
+  const ask = () =>
+    call(request, key, controller.signal).then((text) => {
+      const parts = cleanParts(JSON.parse(text).parts);
+      if (!parts.length) throw new FriendlyError(`${name} didn't find any parts to keep.`);
+      return parts;
+    });
   const first = ask();
   const backup = new Promise((resolve, reject) => {
     const timer = setTimeout(resolve, BACKUP_AFTER);
@@ -205,20 +268,32 @@ async function readTranscript(videoId) {
   return captionFiles[videoId] ? captionLines(captionFiles[videoId]) : null;
 }
 
+function needKey(message) {
+  chrome.runtime.sendMessage('openOptions');
+  return new FriendlyError(message);
+}
+
 async function getParts(videoId) {
   const cacheKey = `parts2:${videoId}`;
   const cached = (await chrome.storage.local.get(cacheKey))[cacheKey];
   if (cached) return cached;
+  const settings = await chrome.storage.local.get(['provider', 'apiKey', 'claudeKey', 'openaiKey']);
+  const provider = PROVIDERS[settings.provider] ? settings.provider : 'gemini';
+  const { name, keyName } = PROVIDERS[provider];
+  if (!settings[keyName]) throw needKey(`Add your ${name} key first.`);
   if (adShowing()) toast('Good Parts will start after the ad.', GIVE_UP_AFTER);
   while (adShowing()) await sleep(500); // The player is busy with the ad's captions, not the video's.
   // Captions are about 17 times cheaper than the video and come back in seconds.
   const transcript = await readTranscript(videoId);
-  const title = document.title.replace(/ - YouTube$/, '');
-  const content = transcript
-    ? [{ text: transcriptPrompt(title, transcript) }]
-    : [{ fileData: { fileUri: `https://www.youtube.com/watch?v=${videoId}` } }, { text: VIDEO_PROMPT }];
-  if (!transcript) toast('This video has no captions, so this can take a minute or two.', GIVE_UP_AFTER);
-  const parts = await askGemini(content);
+  let parts;
+  if (transcript) {
+    const title = document.title.replace(/ - YouTube$/, '');
+    parts = await askAI(provider, { text: transcriptPrompt(title, transcript) }, settings[keyName]);
+  } else {
+    if (!settings.apiKey) throw needKey('This video has no captions, and only Gemini can watch videos. Add a Gemini key.');
+    toast('This video has no captions, so this can take a minute or two.', GIVE_UP_AFTER);
+    parts = await askAI('gemini', { videoId }, settings.apiKey);
+  }
   await chrome.storage.local.set({ [cacheKey]: parts });
   return parts;
 }
