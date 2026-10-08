@@ -1,10 +1,11 @@
-// Free Claude for Good Parts: copies without a Claude key send their transcript prompt here, and this asks
+// Free Claude for Good Parts: copies without a Claude key send a video's title and captions here, and this asks
 // Claude with the owner's key (Max plan API credit). The key stays on Cloudflare as the secret CLAUDE_KEY.
-// The extension owns the instructions and answer format, so copies friends already have keep working when
-// those change. This owns the model and limits, and only takes Good Parts' kind of request.
+// The instructions and answer format come from ../prompt.js, the same file the extension uses, and callers
+// can't change them, so this can't be used as a free general-purpose Claude.
 // Runs as the Cloudflare Worker "good-parts" on the owner's Cloudflare account.
+import '../prompt.js';
 
-const PROMPT_START = 'Here is the transcript of the YouTube video';
+const { FORMAT, transcriptPrompt, JSON_SCHEMA } = globalThis.goodPartsPrompt;
 // About 90k tokens, around 5 hours of captions. Haiku's lower price applies up to 100k.
 const MAX_CHARS = 350000;
 
@@ -19,18 +20,20 @@ export default {
   async fetch(request, env) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     if (request.method !== 'POST') return reply(405, { error: 'Good Parts only' });
-    const { text, schema } = await request.json().catch(() => ({}));
-    if (typeof text !== 'string' || !text.startsWith(PROMPT_START) || text.length > MAX_CHARS || schema?.properties?.parts?.type !== 'array') {
+    const { format, title, lines } = (await request.json().catch(() => null)) || {};
+    if (typeof title !== 'string' || typeof lines !== 'string' || !lines.trim() || title.length + lines.length > MAX_CHARS) {
       return reply(400, { error: 'Good Parts only' });
     }
+    // The extension shows 409 as "out of date": its copy expects an answer format this server no longer gives.
+    if (format !== FORMAT) return reply(409, { error: 'Old Good Parts' });
     const res = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-api-key': env.CLAUDE_KEY, 'anthropic-version': '2023-06-01' },
       body: JSON.stringify({
         model: 'claude-haiku-5-5',
         max_tokens: 16000,
-        output_config: { effort: 'low', format: { type: 'json_schema', schema } },
-        messages: [{ role: 'user', content: text }],
+        output_config: { effort: 'low', format: { type: 'json_schema', schema: JSON_SCHEMA } },
+        messages: [{ role: 'user', content: transcriptPrompt(title, lines) }],
       }),
     });
     const data = await res.json().catch(() => ({}));

@@ -6,69 +6,6 @@ const FREE_CLAUDE = 'https://good-parts.quinnwins.workers.dev';
 
 const HIGHLIGHTS = 0.25; // Share of the video that plays at the viewer's own speed.
 
-// Like a condensed football game with the best plays marked: highlights play normally, the other
-// plays go by faster, and the downtime is skipped. The AI scores each part; cleanParts picks the highlights.
-const EDIT = `Edit it like a condensed football game with the best plays marked: nothing of substance is lost, the downtime is cut, and the best moments stand out.
-List every stretch worth keeping, in time order, one point or topic per stretch, and score how good each one is from 1 to 10:
-- 8 to 10: the best stuff, such as the main points, key arguments, demos, surprising facts, and the conclusion.
-- 1 to 7: everything else with substance, such as smaller points, examples, numbers, and reasons. Never drop one because it seems minor.
-Leave out the downtime: sponsor reads (all of them, from the first sentence to the last), channel plugs, "like and subscribe", greetings and sign-offs, waiting for something to load, filler, rambling, repeating a point already made, and tangents that go nowhere.
-Stretches must not overlap.`;
-
-const VIDEO_PROMPT = `Watch this YouTube video. ${EDIT}
-Each stretch must be a complete thought: start just before it begins and end after it lands, never mid-sentence.
-Write timestamps as M:SS or H:MM:SS using the video's own clock.`;
-
-const transcriptPrompt = (title, lines) => `Here is the transcript of the YouTube video "${title}". Each line starts with its timestamp.
-${EDIT}
-Each stretch must be a complete thought: start at the line where it begins, and end at the timestamp of the first line after it.
-
-${lines}`;
-
-const SCHEMA = {
-  type: 'OBJECT',
-  properties: {
-    parts: {
-      type: 'ARRAY',
-      items: {
-        type: 'OBJECT',
-        properties: {
-          start: { type: 'STRING' },
-          end: { type: 'STRING' },
-          label: { type: 'STRING', description: 'A few plain words saying what this part covers' },
-          score: { type: 'INTEGER', description: 'How good this part is, from 1 to 10' },
-        },
-        required: ['start', 'end', 'label', 'score'],
-      },
-    },
-  },
-  required: ['parts'],
-};
-
-// The same answer format for Claude and GPT (Gemini's API spells its schema differently, above).
-const JSON_SCHEMA = {
-  type: 'object',
-  additionalProperties: false,
-  required: ['parts'],
-  properties: {
-    parts: {
-      type: 'array',
-      items: {
-        type: 'object',
-        additionalProperties: false,
-        required: ['start', 'end', 'label', 'score'],
-        properties: {
-          start: { type: 'string' },
-          end: { type: 'string' },
-          label: { type: 'string', description: 'A few plain words saying what this part covers' },
-          // No minimum/maximum: Claude's structured outputs don't support number limits.
-          score: { type: 'integer', description: 'How good this part is, from 1 to 10' },
-        },
-      },
-    },
-  },
-};
-
 let state = { videoId: null, parts: null, on: false, busy: false, markersFor: null, baseRate: 1, current: null };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -154,10 +91,12 @@ async function post(name, url, headers, body, signal) {
     throw new FriendlyError(`Your ${name} key isn't working. Paste a new one in the settings tab.`);
   }
   if (res.status === 429) throw new FriendlyError(`${name} is busy or your limit is used up. Try again later.`);
+  if (res.status === 409) throw new FriendlyError('This copy of Good Parts is out of date. Ask for the new version.'); // Only the free Claude server sends 409.
   throw new FriendlyError(`${name} had a problem with this video. Try again in a minute.`, res.status >= 500);
 }
 
-// Each call takes { text } (a transcript prompt) or, Gemini only, { videoId }, and returns the answer's JSON text.
+// Each call takes { text, title, lines } (a transcript prompt and what it's made of) or, Gemini only,
+// { videoId }, and returns the answer's JSON text.
 async function callGemini({ text, videoId }, key, signal) {
   const parts = videoId
     ? [{ fileData: { fileUri: `https://www.youtube.com/watch?v=${videoId}` } }, { text: VIDEO_PROMPT }]
@@ -172,7 +111,7 @@ async function callGemini({ text, videoId }, key, signal) {
 
 // Raw HTTP like the other two: the extension has no build step to bundle Anthropic's SDK.
 // Low effort: ~21 s with the same picks as the default (~33 s).
-async function callClaude({ text }, key, signal) {
+async function callClaude({ text, title, lines }, key, signal) {
   const data = key
     ? await post('Claude', 'https://api.anthropic.com/v1/messages', {
       'x-api-key': key,
@@ -184,7 +123,7 @@ async function callClaude({ text }, key, signal) {
       output_config: { effort: 'low', format: { type: 'json_schema', schema: JSON_SCHEMA } },
       messages: [{ role: 'user', content: text }],
     }, signal)
-    : await post('Claude', FREE_CLAUDE, {}, { text, schema: JSON_SCHEMA }, signal); // The server makes the same request.
+    : await post('Claude', FREE_CLAUDE, {}, { format: FORMAT, title, lines }, signal); // The server makes the same request.
   if (data.stop_reason === 'refusal') throw new FriendlyError('Claude declined this video. Try another AI in settings.');
   return (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
 }
@@ -304,7 +243,7 @@ async function getParts(videoId) {
   let parts;
   if (transcript) {
     const title = document.title.replace(/ - YouTube$/, '');
-    parts = await askAI(provider, { text: transcriptPrompt(title, transcript) }, settings[keyName]);
+    parts = await askAI(provider, { text: transcriptPrompt(title, transcript), title, lines: transcript }, settings[keyName]);
   } else {
     if (!settings.apiKey) throw needKey('This video has no captions, and only Gemini can watch videos. Add a Gemini key.');
     toast('This video has no captions, so this can take a minute or two.', GIVE_UP_AFTER);

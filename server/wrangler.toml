@@ -1,0 +1,9 @@
+# Deploy from this folder with `npx wrangler deploy`. The secret CLAUDE_KEY is kept between deploys.
+name = "good-parts"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+account_id = "32b82852b6924f5144eb84d889228be7"
+workers_dev = true
+
+[observability]
+enabled = true
