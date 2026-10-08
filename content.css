@@ -59,7 +59,7 @@
 
 /* Shown while a play is fast-forwarding. */
 #movie_player.gp-fast::after {
-  content: "2x";
+  content: attr(data-gp-fast);
   position: absolute;
   top: 16px;
   right: 16px;

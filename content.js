@@ -1,10 +1,9 @@
 const LEAD_IN = 2; // The AI's starts can land mid-sentence, so begin each part a moment early.
 const BACKUP_AFTER = 75000;
 const GIVE_UP_AFTER = 180000;
-const FAST = 2; // Speed for the plays between highlights.
 
 // Like a condensed football game with the best plays marked: highlights play normally, the other
-// plays go by at 2x, and the downtime is skipped.
+// plays go by faster, and the downtime is skipped.
 const EDIT = `Edit it like a condensed football game with the best plays marked: nothing of substance is lost, the downtime is cut, and the best moments stand out.
 List every stretch worth keeping, in time order, and mark each one:
 - highlight: the best stuff, the main points, key arguments, demos, surprising facts, and the conclusion. About a quarter of the video.
@@ -366,6 +365,12 @@ function partAt(t) {
   return state.parts.find((p) => t >= p.start - 0.5 && t < p.end);
 }
 
+// The plays between highlights go 1.5 times the viewer's own speed, kept between 2x and 3x (faster
+// is hard to follow) and never slower than the viewer's own speed. Quarter steps keep the label tidy.
+function fastSpeed(base) {
+  return Math.max(base, Math.min(3, Math.max(2, Math.round(base * 1.5 * 4) / 4)));
+}
+
 function setSpeed(rate) {
   const v = video();
   if (v && v.playbackRate !== rate) v.playbackRate = rate;
@@ -391,7 +396,7 @@ function follow() {
   if (part === state.current) return;
   state.current = part;
   const fast = part.kind === 'play';
-  setSpeed(fast ? Math.max(FAST, state.baseRate) : state.baseRate);
+  setSpeed(fast ? fastSpeed(state.baseRate) : state.baseRate);
   player().classList.toggle('gp-fast', fast);
   if (!fast) toast(`Highlight: ${part.label}`);
 }
@@ -416,8 +421,10 @@ function turnOn() {
   state.current = null;
   const v = video();
   state.baseRate = v.playbackRate;
+  const fast = fastSpeed(state.baseRate);
+  player().dataset.gpFast = `${fast}x`; // The speed badge's text.
   const time = (kind) => state.parts.filter((p) => p.kind === kind).reduce((sum, p) => sum + (p.end - p.start), 0);
-  const watch = Math.round((time('highlight') / state.baseRate + time('play') / Math.max(FAST, state.baseRate)) / 60);
+  const watch = Math.round((time('highlight') / state.baseRate + time('play') / fast) / 60);
   if (adShowing()) {
     toast(`About ${watch} min to watch. Starting after the ad.`, 4000);
     return; // onTimeUpdate takes over once the ad ends.
@@ -426,7 +433,7 @@ function turnOn() {
   follow();
   drawMarkers();
   v.play().catch(() => {});
-  toast(`About ${watch} min instead of ${Math.round(v.duration / 60)}. Best parts play as usual, the rest at 2x, filler skipped.`, 5000);
+  toast(`About ${watch} min instead of ${Math.round(v.duration / 60)}. Best parts play as usual, the rest at ${fast}x, filler skipped.`, 5000);
 }
 
 function turnOff() {
