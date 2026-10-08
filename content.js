@@ -7,7 +7,11 @@ const FREE_CLAUDE = 'https://good-parts.quinnwins.workers.dev';
 const HIGHLIGHTS = 0.25; // Share of the video that plays at the viewer's own speed.
 const SKIPPED = 0.25; // Share of the video skipped at the least, weakest parts first.
 
-let state = { videoId: null, parts: null, on: false, busy: false, markersFor: null, baseRate: 1, current: null };
+const PREFETCH_FROM = 10 * 60; // Long talk videos are what Good Parts is for, so work those out on opening.
+
+// loading: the parts being worked out ({ id, quiet, promise }). openGap: a skipped stretch the viewer went
+// back to on purpose, which plays until the next part. jumpTo: where Good Parts itself last moved the video.
+let state = { videoId: null, parts: null, on: false, busy: false, markersFor: null, baseRate: 1, current: null, loading: null, openGap: null, jumpTo: null };
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const player = () => document.querySelector('#movie_player');
@@ -238,21 +242,27 @@ async function readTranscript(videoId) {
   return captionFiles[videoId] ? captionLines(captionFiles[videoId]) : null;
 }
 
-function needKey(message) {
+// In a quiet (background) run, a missing key or missing captions stop silently instead of opening settings
+// or sending the whole video to Gemini; the viewer's own click tries again out loud.
+class QuietStop extends Error {}
+
+function needKey(message, quiet) {
+  if (quiet) return new QuietStop(message);
   chrome.runtime.sendMessage('openOptions');
   return new FriendlyError(message);
 }
 
-async function getParts(videoId) {
+async function getParts(videoId, quiet) {
   const cacheKey = `parts4:${videoId}`;
   const cached = (await chrome.storage.local.get(cacheKey))[cacheKey];
   if (cached) return cached;
   const settings = await chrome.storage.local.get(['provider', 'apiKey', 'claudeKey', 'openaiKey']);
   const provider = PROVIDERS[settings.provider] ? settings.provider : 'claude';
   const { name, keyName, free } = PROVIDERS[provider];
-  if (!settings[keyName] && !free) throw needKey(`Add your ${name} key first.`);
-  if (adShowing()) toast('Good Parts will start after the ad.', GIVE_UP_AFTER);
+  if (!settings[keyName] && !free) throw needKey(`Add your ${name} key first.`, quiet);
+  if (adShowing() && !quiet) toast('Good Parts will start after the ad.', GIVE_UP_AFTER);
   while (adShowing()) await sleep(500); // The player is busy with the ad's captions, not the video's.
+  if (quiet && currentVideoId() !== videoId) throw new QuietStop('Moved on to another video.');
   // Captions are about 17 times cheaper than the video and come back in seconds.
   const transcript = await readTranscript(videoId);
   let parts;
@@ -260,6 +270,7 @@ async function getParts(videoId) {
     const title = document.title.replace(/ - YouTube$/, '');
     parts = await askAI(provider, { text: transcriptPrompt(title, transcript), title, lines: transcript }, settings[keyName]);
   } else {
+    if (quiet) throw new QuietStop('No captions.');
     if (!settings.apiKey) throw needKey('This video has no captions, and only Gemini can watch videos. Add a Gemini key.');
     toast('This video has no captions, so this can take a minute or two.', GIVE_UP_AFTER);
     parts = await askAI('gemini', { videoId }, settings.apiKey);
@@ -268,30 +279,88 @@ async function getParts(videoId) {
   return parts;
 }
 
+// One load per video. A click while a background load runs waits for it, and retries out loud if it stopped quietly.
+function loadParts(id, quiet = false) {
+  const running = state.loading?.id === id ? state.loading : null;
+  if (running && !(running.quiet && !quiet)) return running.promise;
+  const first = running ? running.promise.catch((err) => (err instanceof QuietStop ? getParts(id, false) : Promise.reject(err))) : getParts(id, quiet);
+  const promise = first.then((parts) => {
+    if (currentVideoId() === id) {
+      state.videoId = id;
+      state.parts = parts;
+      ensureButton();
+    }
+    return parts;
+  });
+  state.loading = { id, quiet, promise };
+  promise.catch(() => {}).finally(() => { if (state.loading?.promise === promise) state.loading = null; });
+  return promise;
+}
+
+// Work out a long video's good parts as soon as it opens, so the button can show "Watch in 14 min".
+async function prefetch() {
+  const id = currentVideoId();
+  if (!id || state.loading?.id === id || (state.parts && state.videoId === id)) return;
+  await sleep(3000); // YouTube sometimes switches captions on by itself about 3 s after a video opens.
+  while (adShowing() && currentVideoId() === id) await sleep(1000);
+  for (let i = 0; i < 20 && !(video()?.duration > 0); i++) await sleep(500); // Length not known yet.
+  const v = video();
+  if (currentVideoId() !== id || !v || !(v.duration >= PREFETCH_FROM)) return;
+  loadParts(id, true).catch((err) => console.info('[Good Parts] not worked out in advance:', err.message));
+}
+
 // ---------- UI ----------
+
+const ready = () => !!state.parts && state.videoId === currentVideoId();
+
+// Minutes to watch with the rest at 2x (or 1.5x the viewer's own speed), or, short, with the rest at 3x.
+function watchMinutes(short) {
+  const base = state.on ? state.baseRate : video()?.playbackRate || 1;
+  const time = (kind) => state.parts.filter((p) => p.kind === kind).reduce((sum, p) => sum + (p.end - p.start), 0);
+  return Math.round((time('highlight') / base + time('play') / fastSpeed(base, short)) / 60);
+}
 
 function ensureButton() {
   const right = document.querySelector('#movie_player .ytp-chrome-controls .ytp-right-controls');
   if (!right) return;
   let btn = right.parentElement.querySelector(':scope > .gp-button');
+  let alt = right.parentElement.querySelector(':scope > .gp-length');
   if (!btn) {
     btn = document.createElement('button');
     btn.className = 'gp-button';
     btn.addEventListener('click', onButtonClick);
     right.before(btn); // Its own pill; YouTube's control pills have fixed widths and clip extra buttons.
   }
+  if (!alt) {
+    alt = document.createElement('button');
+    alt.className = 'gp-length';
+    alt.addEventListener('click', onLengthClick);
+    right.before(alt);
+  }
   btn.hidden = !currentVideoId();
   // While a part is sped up, the button shows the speed, so the jump doesn't look like a glitch.
   const fast = state.on && state.current?.kind === 'play';
-  const label = state.busy ? 'Finding good parts…' : fast ? `Good parts: ${video().playbackRate}x` : state.on ? 'Good parts: on' : 'Good parts';
+  const label = state.busy ? 'Finding good parts…'
+    : fast ? `Good parts: ${video().playbackRate}x`
+    : state.on ? 'Good parts: on'
+    : ready() ? `Watch in ${watchMinutes(faster)} min`
+    : 'Good parts';
   if (btn.textContent !== label) btn.textContent = label;
   btn.classList.toggle('gp-on', state.on);
+  btn.classList.toggle('gp-ready', !state.on && !state.busy && ready());
   btn.title = state.on ? 'Back to the full video' : 'Watch the best parts, speed through the rest';
+  // The other length, one click away. Hidden when both come out the same (a viewer already at 3x).
+  const other = !btn.hidden && !state.busy && ready() ? watchMinutes(!faster) : null;
+  alt.hidden = other === null || other === watchMinutes(faster);
+  const altLabel = `or ${other} min`;
+  if (!alt.hidden && alt.textContent !== altLabel) alt.textContent = altLabel;
+  alt.title = `The rest at ${fastSpeed(state.on ? state.baseRate : video()?.playbackRate || 1, !faster)}x`;
 }
 
 let toastTimer;
 let toastFor; // The video a message is about, so switching videos can clear it.
-function toast(text, ms = 3000) {
+// action: an optional { label, run } button, such as Undo after a skip.
+function toast(text, ms = 3000, action) {
   const host = player();
   if (!host) return;
   toastFor = currentVideoId();
@@ -302,6 +371,19 @@ function toast(text, ms = 3000) {
     host.appendChild(el);
   }
   el.textContent = text;
+  if (action) {
+    const b = document.createElement('button');
+    b.className = 'gp-toast-action';
+    b.textContent = action.label;
+    // Clicks on the player would also pause or play the video.
+    for (const type of ['mousedown', 'mouseup', 'pointerdown', 'pointerup']) b.addEventListener(type, (e) => e.stopPropagation());
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
+      el.classList.remove('gp-show');
+      action.run();
+    });
+    el.appendChild(b);
+  }
   el.classList.add('gp-show');
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => el.classList.remove('gp-show'), ms);
@@ -339,12 +421,12 @@ function partAt(t) {
 
 // The plays between highlights go 1.5 times the viewer's own speed, kept between 2x and 3x (faster
 // is hard to follow) and never slower than the viewer's own speed. Quarter steps keep the label tidy.
-// "Play the rest at 3x" in settings makes them 3x.
+// The shorter length (the small button next to Good Parts) plays them at 3x; that choice is remembered.
 let faster = false;
 chrome.storage.local.get('faster').then((s) => { faster = !!s.faster; });
 chrome.storage.onChanged.addListener((changes) => { if (changes.faster) faster = !!changes.faster.newValue; });
-function fastSpeed(base) {
-  if (faster) return Math.max(base, 3);
+function fastSpeed(base, short = faster) {
+  if (short) return Math.max(base, 3);
   return Math.max(base, Math.min(3, Math.max(2, Math.round(base * 1.5 * 4) / 4)));
 }
 
@@ -353,16 +435,39 @@ function setSpeed(rate) {
   if (v && v.playbackRate !== rate) v.playbackRate = rate;
 }
 
+// Moves the video for Good Parts, so onSeeking can tell it apart from the viewer moving it.
+function jump(t) {
+  state.jumpTo = t;
+  video().currentTime = t;
+}
+
+const howLong = (sec) => (sec < 90 ? `${Math.round(sec)} seconds` : `${Math.round(sec / 60)} min`);
+
 // Skip downtime, speed through plays, and play highlights at the viewer's own speed. Speed only changes
 // when a new part starts, so a speed the viewer picks mid-part sticks until the next one.
 function follow() {
   const v = video();
   const part = partAt(v.currentTime);
   if (!part) {
+    // A skipped stretch the viewer chose to watch plays at their own speed until the next part.
+    if (state.openGap && v.currentTime < state.openGap.end) {
+      if (state.current !== state.openGap) {
+        state.current = state.openGap;
+        setSpeed(state.baseRate);
+        ensureButton();
+      }
+      return;
+    }
+    state.openGap = null;
     const next = state.parts.find((p) => p.start > v.currentTime);
     if (next) {
-      v.currentTime = next.start;
-      toast(`Skipping to ${clock(next.start)}: ${next.label}`);
+      const from = v.currentTime;
+      jump(next.start);
+      // Land in the next part here, so its own message can't replace this one and its Undo button.
+      state.current = next;
+      setSpeed(next.kind === 'play' ? fastSpeed(state.baseRate) : state.baseRate);
+      ensureButton();
+      toast(`Skipped ${howLong(next.start - from)}`, 4000, { label: 'Undo', run: () => watchSkipped(from, next.start) });
     } else {
       v.pause();
       turnOff();
@@ -370,12 +475,32 @@ function follow() {
     }
     return;
   }
+  state.openGap = null;
   if (part === state.current) return;
   state.current = part;
   const fast = part.kind === 'play';
   setSpeed(fast ? fastSpeed(state.baseRate) : state.baseRate);
   ensureButton();
   if (!fast) toast(`Highlight: ${part.label}`);
+}
+
+function watchSkipped(start, end) {
+  if (!state.on) return;
+  state.openGap = { start, end };
+  jump(start);
+  follow();
+}
+
+// The viewer moved the video (dragged the bar, pressed an arrow key). If they landed in a skipped
+// stretch, they want to see it, so it plays instead of being skipped again.
+function onSeeking(e) {
+  if (!state.on || e.target !== video() || adShowing()) return;
+  const t = e.target.currentTime;
+  const ours = state.jumpTo !== null && Math.abs(t - state.jumpTo) < 1;
+  state.jumpTo = null;
+  if (ours) return;
+  const next = state.parts.find((p) => p.start > t);
+  state.openGap = partAt(t) ? null : { start: t, end: next ? next.start : e.target.duration };
 }
 
 function onTimeUpdate(e) {
@@ -393,30 +518,34 @@ function onTimeUpdate(e) {
   follow();
 }
 
+function summary() {
+  const v = video();
+  return `About ${watchMinutes(faster)} min instead of ${Math.round(v.duration / 60)}. Best parts play as usual, the rest at ${fastSpeed(state.baseRate)}x, filler skipped.`;
+}
+
 function turnOn() {
   state.on = true;
   state.current = null;
+  state.openGap = null;
   const v = video();
   state.baseRate = v.playbackRate;
-  const fast = fastSpeed(state.baseRate);
-  const time = (kind) => state.parts.filter((p) => p.kind === kind).reduce((sum, p) => sum + (p.end - p.start), 0);
-  const watch = Math.round((time('highlight') / state.baseRate + time('play') / fast) / 60);
   if (adShowing()) {
-    toast(`About ${watch} min to watch. Starting after the ad.`, 4000);
+    toast(`About ${watchMinutes(faster)} min to watch. Starting after the ad.`, 4000);
     return; // onTimeUpdate takes over once the ad ends.
   }
   // Start inside a part, so the next part's own message can't replace the summary below a moment later.
-  if (!partAt(v.currentTime)) v.currentTime = (state.parts.find((p) => p.start > v.currentTime) || state.parts[0]).start;
+  if (!partAt(v.currentTime)) jump((state.parts.find((p) => p.start > v.currentTime) || state.parts[0]).start);
   follow();
   drawMarkers();
   v.play().catch(() => {});
-  toast(`About ${watch} min instead of ${Math.round(v.duration / 60)}. Best parts play as usual, the rest at ${fast}x, filler skipped.`, 5000);
+  toast(summary(), 5000);
 }
 
 function turnOff() {
   if (state.on) setSpeed(state.baseRate);
   state.on = false;
   state.current = null;
+  state.openGap = null;
   removeMarkers();
   ensureButton();
 }
@@ -430,14 +559,12 @@ async function onButtonClick(e) {
   }
   const id = currentVideoId();
   if (!id) return;
-  if (!state.parts || state.videoId !== id) {
+  if (!ready()) {
     state.busy = true;
     ensureButton();
     try {
-      const parts = await getParts(id);
+      await loadParts(id);
       if (currentVideoId() !== id) return; // Moved on to another video while waiting.
-      state.videoId = id;
-      state.parts = parts;
     } catch (err) {
       console.warn('[Good Parts]', err);
       toast(err instanceof FriendlyError ? err.message : 'Something went wrong. Refresh the page and try again.', 5000);
@@ -451,6 +578,22 @@ async function onButtonClick(e) {
   ensureButton();
 }
 
+// The small button: switch to the other length (and start, if Good Parts is off). The choice is remembered.
+function onLengthClick(e) {
+  e.stopPropagation();
+  if (state.busy || !ready()) return;
+  faster = !faster;
+  chrome.storage.local.set({ faster });
+  if (!state.on) {
+    turnOn();
+  } else {
+    state.current = null; // Re-pick the speed for the part playing now.
+    follow();
+    toast(summary(), 4000);
+  }
+  ensureButton();
+}
+
 function onNavigate() {
   // YouTube also fires this once on a fresh page load, so only clear messages about another video.
   if (currentVideoId() !== toastFor) player()?.querySelector('.gp-toast')?.classList.remove('gp-show');
@@ -460,9 +603,11 @@ function onNavigate() {
     state.videoId = null;
   }
   ensureButton();
+  prefetch();
 }
 
 document.addEventListener('timeupdate', onTimeUpdate, true); // Media events don't bubble, but capture sees them.
+document.addEventListener('seeking', onSeeking, true);
 document.addEventListener('yt-navigate-start', turnOff); // Stop before the next video starts playing.
 document.addEventListener('yt-navigate-finish', onNavigate);
 setInterval(ensureButton, 1000); // YouTube rebuilds its player controls at will.

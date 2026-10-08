@@ -14,6 +14,8 @@
 }
 .gp-button:hover { background: rgba(0, 0, 0, 0.5); }
 .gp-button.gp-on { background: #ffc83d; color: #111; }
+/* Worked out and ready ("Watch in 14 min"): a gold outline, so it stands out before it's switched on. */
+.gp-button.gp-ready { box-shadow: inset 0 0 0 2px #ffc83d; }
 .gp-button[hidden] { display: none; }
 
 .gp-toast {
@@ -56,3 +58,35 @@
 /* Highlights: full-height gold. Other plays: thinner and pale, so the two differ by shape, not just colour. */
 .gp-highlight { top: 0; bottom: 0; background: #ffc83d; }
 .gp-play { top: 1px; bottom: 1px; background: rgba(255, 255, 255, 0.55); }
+
+/* The other length ("11 min"), next to the Good Parts button: smaller, so the main button stays the one to press. */
+.gp-length {
+  flex: 0 0 auto;
+  align-self: center;
+  height: 32px;
+  margin-right: 8px;
+  padding: 0 12px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.3);
+  color: #fff;
+  font: 500 13px/30px Roboto, Arial, sans-serif;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.gp-length:hover { background: rgba(0, 0, 0, 0.5); }
+.gp-length[hidden] { display: none; }
+
+/* Undo in a message: gold on dark for contrast, and clickable although the message itself isn't. */
+.gp-toast-action {
+  margin-left: 12px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #ffc83d;
+  font: inherit;
+  font-weight: 700;
+  text-decoration: underline;
+  cursor: pointer;
+  pointer-events: auto;
+}
