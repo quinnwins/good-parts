@@ -307,7 +307,22 @@ function noteWatching(v) {
   watching.at = v.currentTime;
   if (watching.seconds < WORK_OUT_AFTER || watching.started || !(v.duration >= LONG_VIDEO) || ready() || state.loading) return;
   watching.started = true;
-  loadParts(id, true).catch((err) => console.info('[Good Parts] not worked out in advance:', err.message));
+  loadParts(id, true)
+    .then(() => { if (!state.on && ready() && currentVideoId() === id) offer(); })
+    .catch((err) => console.info('[Good Parts] not worked out in advance:', err.message));
+}
+
+// YouTube hides its controls while a video plays, so the button's "Watch in 14 min" may go unseen.
+// Say it once in a message, with a button to start.
+function offer() {
+  toast(`Good Parts: ${watchMinutes(shorter)} min instead of ${Math.round(video().duration / 60)}`, 8000, {
+    label: 'Watch',
+    run: () => {
+      if (state.on || !ready()) return;
+      turnOn();
+      ensureButton();
+    },
+  });
 }
 
 // ---------- UI ----------
@@ -344,18 +359,18 @@ function ensureButton() {
   const label = state.busy ? 'Finding good parts…'
     : fast ? `Good parts: ${video().playbackRate}x`
     : state.on ? 'Good parts: on'
-    : ready() ? `Watch in ${watchMinutes(faster)} min`
+    : ready() ? `Watch in ${watchMinutes(shorter)} min`
     : 'Good parts';
   if (btn.textContent !== label) btn.textContent = label;
   btn.classList.toggle('gp-on', state.on);
   btn.classList.toggle('gp-ready', !state.on && !state.busy && ready());
   btn.title = state.on ? 'Back to the full video' : 'Watch the best parts, speed through the rest';
   // The other length, one click away. Hidden when both come out the same (a viewer already at 3x).
-  const other = !btn.hidden && !state.busy && ready() ? watchMinutes(!faster) : null;
-  alt.hidden = other === null || other === watchMinutes(faster);
+  const other = !btn.hidden && !state.busy && ready() ? watchMinutes(!shorter) : null;
+  alt.hidden = other === null || other === watchMinutes(shorter);
   const altLabel = `or ${other} min`;
   if (!alt.hidden && alt.textContent !== altLabel) alt.textContent = altLabel;
-  alt.title = `The rest at ${fastSpeed(state.on ? state.baseRate : video()?.playbackRate || 1, !faster)}x`;
+  alt.title = `The rest at ${fastSpeed(state.on ? state.baseRate : video()?.playbackRate || 1, !shorter)}x`;
 }
 
 let toastTimer;
@@ -420,15 +435,14 @@ function partAt(t) {
   return state.parts.find((p) => t >= p.start - 0.5 && t < p.end);
 }
 
-// The plays between highlights go 1.5 times the viewer's own speed, kept between 2x and 3x (faster
-// is hard to follow) and never slower than the viewer's own speed. Quarter steps keep the label tidy.
-// The shorter length (the small button next to Good Parts) plays them at 3x; that choice is remembered.
-let faster = false;
-chrome.storage.local.get('faster').then((s) => { faster = !!s.faster; });
-chrome.storage.onChanged.addListener((changes) => { if (changes.faster) faster = !!changes.faster.newValue; });
-function fastSpeed(base, short = faster) {
-  if (short) return Math.max(base, 3);
-  return Math.max(base, Math.min(3, Math.max(2, Math.round(base * 1.5 * 4) / 4)));
+// The plays between highlights go at 2x (3x felt too fast), or the shorter length's 3x (the small button next
+// to Good Parts; that choice is remembered). Never slower than the viewer's own speed.
+// (The old settings checkbox saved "faster"; it's ignored, so everyone starts at 2x.)
+let shorter = false;
+chrome.storage.local.get('shorter').then((s) => { shorter = !!s.shorter; });
+chrome.storage.onChanged.addListener((changes) => { if (changes.shorter) shorter = !!changes.shorter.newValue; });
+function fastSpeed(base, short = shorter) {
+  return Math.max(base, short ? 3 : 2);
 }
 
 function setSpeed(rate) {
@@ -517,7 +531,7 @@ function onTimeUpdate(e) {
 
 function summary() {
   const v = video();
-  return `About ${watchMinutes(faster)} min instead of ${Math.round(v.duration / 60)}. Best parts play as usual, the rest at ${fastSpeed(state.baseRate)}x, filler skipped.`;
+  return `About ${watchMinutes(shorter)} min instead of ${Math.round(v.duration / 60)}. Best parts play as usual, the rest at ${fastSpeed(state.baseRate)}x, filler skipped.`;
 }
 
 function turnOn() {
@@ -527,7 +541,7 @@ function turnOn() {
   const v = video();
   state.baseRate = v.playbackRate;
   if (adShowing()) {
-    toast(`About ${watchMinutes(faster)} min to watch. Starting after the ad.`, 4000);
+    toast(`About ${watchMinutes(shorter)} min to watch. Starting after the ad.`, 4000);
     return; // onTimeUpdate takes over once the ad ends.
   }
   // Start inside a part, so the next part's own message can't replace the summary below a moment later.
@@ -580,8 +594,8 @@ async function onButtonClick(e) {
 function onLengthClick(e) {
   e.stopPropagation();
   if (state.busy || !ready()) return;
-  faster = !faster;
-  chrome.storage.local.set({ faster });
+  shorter = !shorter;
+  chrome.storage.local.set({ shorter });
   if (!state.on) {
     turnOn();
   } else {
