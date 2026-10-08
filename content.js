@@ -158,6 +158,7 @@ async function callGemini({ text, videoId }, key, signal) {
 }
 
 // Raw HTTP like the other two: the extension has no build step to bundle Anthropic's SDK.
+// Low effort: ~21 s with the same picks as the default (~33 s).
 async function callClaude({ text }, key, signal) {
   const data = await post('Claude', 'https://api.anthropic.com/v1/messages', {
     'x-api-key': key,
@@ -166,7 +167,7 @@ async function callClaude({ text }, key, signal) {
   }, {
     model: 'claude-haiku-5-5',
     max_tokens: 16000,
-    output_config: { format: { type: 'json_schema', schema: JSON_SCHEMA } },
+    output_config: { effort: 'low', format: { type: 'json_schema', schema: JSON_SCHEMA } },
     messages: [{ role: 'user', content: text }],
   }, signal);
   if (data.stop_reason === 'refusal') throw new FriendlyError('Claude declined this video. Try another AI in settings.');
