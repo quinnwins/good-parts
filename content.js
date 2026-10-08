@@ -324,7 +324,12 @@ function partAt(t) {
 
 // The plays between highlights go 1.5 times the viewer's own speed, kept between 2x and 3x (faster
 // is hard to follow) and never slower than the viewer's own speed. Quarter steps keep the label tidy.
+// "Play the rest at 3x" in settings makes them 3x.
+let faster = false;
+chrome.storage.local.get('faster').then((s) => { faster = !!s.faster; });
+chrome.storage.onChanged.addListener((changes) => { if (changes.faster) faster = !!changes.faster.newValue; });
 function fastSpeed(base) {
+  if (faster) return Math.max(base, 3);
   return Math.max(base, Math.min(3, Math.max(2, Math.round(base * 1.5 * 4) / 4)));
 }
 
