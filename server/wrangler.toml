@@ -8,3 +8,9 @@ preview_urls = false
 
 [observability]
 enabled = true
+
+# Saved answers and the daily limit's counts. Tables are in schema.sql.
+[[d1_databases]]
+binding = "DB"
+database_name = "good-parts"
+database_id = "36c29a54-74e7-4e76-827a-37d90d4f8aa8"
