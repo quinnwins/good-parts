@@ -23,26 +23,26 @@
     <p>Good Parts sends each video's captions to the AI you pick to find the best parts.</p>
     <fieldset>
       <legend>AI</legend>
+      <label class="choice"><input type="radio" name="provider" value="claude"> Claude Haiku 5.5 (Anthropic): free, no key needed</label>
       <label class="choice"><input type="radio" name="provider" value="gemini"> Gemini 3.8 Flash (Google)</label>
-      <label class="choice"><input type="radio" name="provider" value="claude"> Claude Haiku 5.5 (Anthropic)</label>
       <label class="choice"><input type="radio" name="provider" value="openai"> GPT-6 Luna (OpenAI)</label>
     </fieldset>
+    <div class="key">
+      <label for="claudeKey">Claude key (optional)</label>
+      <input id="claudeKey" type="password" autocomplete="off" spellcheck="false">
+      <a href="https://platform.claude.com/settings/keys" target="_blank">Get a key from Anthropic</a>
+    </div>
     <div class="key">
       <label for="apiKey">Gemini key</label>
       <input id="apiKey" type="password" autocomplete="off" spellcheck="false">
       <a href="https://aistudio.google.com/apikey" target="_blank">Get a free key from Google</a>
     </div>
     <div class="key">
-      <label for="claudeKey">Claude key</label>
-      <input id="claudeKey" type="password" autocomplete="off" spellcheck="false">
-      <a href="https://platform.claude.com/settings/keys" target="_blank">Get a key from Anthropic</a>
-    </div>
-    <div class="key">
       <label for="openaiKey">OpenAI key</label>
       <input id="openaiKey" type="password" autocomplete="off" spellcheck="false">
       <a href="https://platform.openai.com/api-keys" target="_blank">Get a key from OpenAI</a>
     </div>
-    <p class="note">Videos without captions always go to Gemini, so keep a Gemini key here.</p>
+    <p class="note">Videos without captions only work with a Gemini key.</p>
     <button id="save">Save</button><span id="status"></span>
   </main>
   <script src="options.js"></script>

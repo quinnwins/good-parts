@@ -3,7 +3,7 @@ const status = document.getElementById('status');
 
 chrome.storage.local.get(['provider', ...KEYS]).then((saved) => {
   for (const k of KEYS) document.getElementById(k).value = saved[k] || '';
-  const provider = saved.provider || 'gemini';
+  const provider = saved.provider || 'claude';
   document.querySelector(`input[name="provider"][value="${provider}"]`).checked = true;
 });
 

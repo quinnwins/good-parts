@@ -1,6 +1,8 @@
 const LEAD_IN = 2; // The AI's starts can land mid-sentence, so begin each part a moment early.
 const BACKUP_AFTER = 75000;
 const GIVE_UP_AFTER = 180000;
+// Without a Claude key, Claude goes through the Good Parts server (server/worker.js), so friends' copies need no key.
+const FREE_CLAUDE = 'https://good-parts.quinnwins.workers.dev';
 
 const HIGHLIGHTS = 0.25; // Share of the video that plays at the viewer's own speed.
 
@@ -171,16 +173,18 @@ async function callGemini({ text, videoId }, key, signal) {
 // Raw HTTP like the other two: the extension has no build step to bundle Anthropic's SDK.
 // Low effort: ~21 s with the same picks as the default (~33 s).
 async function callClaude({ text }, key, signal) {
-  const data = await post('Claude', 'https://api.anthropic.com/v1/messages', {
-    'x-api-key': key,
-    'anthropic-version': '2023-06-01',
-    'anthropic-dangerous-direct-browser-access': 'true', // Anthropic only answers requests from a browser page with this.
-  }, {
-    model: 'claude-haiku-5-5',
-    max_tokens: 16000,
-    output_config: { effort: 'low', format: { type: 'json_schema', schema: JSON_SCHEMA } },
-    messages: [{ role: 'user', content: text }],
-  }, signal);
+  const data = key
+    ? await post('Claude', 'https://api.anthropic.com/v1/messages', {
+      'x-api-key': key,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true', // Anthropic only answers requests from a browser page with this.
+    }, {
+      model: 'claude-haiku-5-5',
+      max_tokens: 16000,
+      output_config: { effort: 'low', format: { type: 'json_schema', schema: JSON_SCHEMA } },
+      messages: [{ role: 'user', content: text }],
+    }, signal)
+    : await post('Claude', FREE_CLAUDE, {}, { text, schema: JSON_SCHEMA }, signal); // The server makes the same request.
   if (data.stop_reason === 'refusal') throw new FriendlyError('Claude declined this video. Try another AI in settings.');
   return (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
 }
@@ -197,11 +201,11 @@ async function callOpenAI({ text }, key, signal) {
   return content.filter((c) => c.type === 'output_text').map((c) => c.text).join('');
 }
 
-// Which AI picks the parts (chosen in settings). Only Gemini can watch a video itself, so videos without
-// captions always go to Gemini.
+// Which AI picks the parts (chosen in settings; Claude unless changed, since it needs no key). Only Gemini
+// can watch a video itself, so videos without captions always go to Gemini.
 const PROVIDERS = {
   gemini: { name: 'Gemini', keyName: 'apiKey', call: callGemini },
-  claude: { name: 'Claude', keyName: 'claudeKey', call: callClaude },
+  claude: { name: 'Claude', keyName: 'claudeKey', call: callClaude, free: true },
   openai: { name: 'GPT', keyName: 'openaiKey', call: callOpenAI },
 };
 
@@ -290,9 +294,9 @@ async function getParts(videoId) {
   const cached = (await chrome.storage.local.get(cacheKey))[cacheKey];
   if (cached) return cached;
   const settings = await chrome.storage.local.get(['provider', 'apiKey', 'claudeKey', 'openaiKey']);
-  const provider = PROVIDERS[settings.provider] ? settings.provider : 'gemini';
-  const { name, keyName } = PROVIDERS[provider];
-  if (!settings[keyName]) throw needKey(`Add your ${name} key first.`);
+  const provider = PROVIDERS[settings.provider] ? settings.provider : 'claude';
+  const { name, keyName, free } = PROVIDERS[provider];
+  if (!settings[keyName] && !free) throw needKey(`Add your ${name} key first.`);
   if (adShowing()) toast('Good Parts will start after the ad.', GIVE_UP_AFTER);
   while (adShowing()) await sleep(500); // The player is busy with the ad's captions, not the video's.
   // Captions are about 17 times cheaper than the video and come back in seconds.
