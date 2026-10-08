@@ -56,18 +56,3 @@
 /* Highlights: full-height gold. Other plays: thinner and pale, so the two differ by shape, not just colour. */
 .gp-highlight { top: 0; bottom: 0; background: #ffc83d; }
 .gp-play { top: 1px; bottom: 1px; background: rgba(255, 255, 255, 0.55); }
-
-/* Shown while a play is fast-forwarding. */
-#movie_player.gp-fast::after {
-  content: attr(data-gp-fast);
-  position: absolute;
-  top: 16px;
-  right: 16px;
-  z-index: 70;
-  padding: 6px 12px;
-  border-radius: 10px;
-  background: rgba(0, 0, 0, 0.82);
-  color: #fff;
-  font: 600 15px/1.2 Roboto, Arial, sans-serif;
-  pointer-events: none;
-}

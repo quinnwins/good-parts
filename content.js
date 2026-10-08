@@ -311,7 +311,9 @@ function ensureButton() {
     right.before(btn); // Its own pill; YouTube's control pills have fixed widths and clip extra buttons.
   }
   btn.hidden = !currentVideoId();
-  const label = state.busy ? 'Finding good parts…' : state.on ? 'Good parts: on' : 'Good parts';
+  // While a part is sped up, the button shows the speed, so the jump doesn't look like a glitch.
+  const fast = state.on && state.current?.kind === 'play';
+  const label = state.busy ? 'Finding good parts…' : fast ? `Good parts: ${video().playbackRate}x` : state.on ? 'Good parts: on' : 'Good parts';
   if (btn.textContent !== label) btn.textContent = label;
   btn.classList.toggle('gp-on', state.on);
   btn.title = state.on ? 'Back to the full video' : 'Watch the best parts, speed through the rest';
@@ -397,7 +399,7 @@ function follow() {
   state.current = part;
   const fast = part.kind === 'play';
   setSpeed(fast ? fastSpeed(state.baseRate) : state.baseRate);
-  player().classList.toggle('gp-fast', fast);
+  ensureButton();
   if (!fast) toast(`Highlight: ${part.label}`);
 }
 
@@ -408,7 +410,7 @@ function onTimeUpdate(e) {
     if (state.current) {
       setSpeed(state.baseRate);
       state.current = null;
-      player().classList.remove('gp-fast');
+      ensureButton();
     }
     return;
   }
@@ -422,14 +424,14 @@ function turnOn() {
   const v = video();
   state.baseRate = v.playbackRate;
   const fast = fastSpeed(state.baseRate);
-  player().dataset.gpFast = `${fast}x`; // The speed badge's text.
   const time = (kind) => state.parts.filter((p) => p.kind === kind).reduce((sum, p) => sum + (p.end - p.start), 0);
   const watch = Math.round((time('highlight') / state.baseRate + time('play') / fast) / 60);
   if (adShowing()) {
     toast(`About ${watch} min to watch. Starting after the ad.`, 4000);
     return; // onTimeUpdate takes over once the ad ends.
   }
-  if (!partAt(v.currentTime) && !state.parts.some((p) => p.start > v.currentTime)) v.currentTime = state.parts[0].start;
+  // Start inside a part, so the next part's own message can't replace the summary below a moment later.
+  if (!partAt(v.currentTime)) v.currentTime = (state.parts.find((p) => p.start > v.currentTime) || state.parts[0]).start;
   follow();
   drawMarkers();
   v.play().catch(() => {});
@@ -440,7 +442,6 @@ function turnOff() {
   if (state.on) setSpeed(state.baseRate);
   state.on = false;
   state.current = null;
-  player()?.classList.remove('gp-fast');
   removeMarkers();
   ensureButton();
 }
