@@ -2,12 +2,14 @@ const LEAD_IN = 2; // The AI's starts can land mid-sentence, so begin each part 
 const BACKUP_AFTER = 75000;
 const GIVE_UP_AFTER = 180000;
 
+const HIGHLIGHTS = 0.25; // Share of the video that plays at the viewer's own speed.
+
 // Like a condensed football game with the best plays marked: highlights play normally, the other
-// plays go by faster, and the downtime is skipped.
+// plays go by faster, and the downtime is skipped. The AI scores each part; cleanParts picks the highlights.
 const EDIT = `Edit it like a condensed football game with the best plays marked: nothing of substance is lost, the downtime is cut, and the best moments stand out.
-List every stretch worth keeping, in time order, and mark each one:
-- highlight: the best stuff, the main points, key arguments, demos, surprising facts, and the conclusion. About a quarter of the video.
-- play: everything else with substance, such as smaller points, examples, numbers, and reasons. Never drop one because it seems minor.
+List every stretch worth keeping, in time order, one point or topic per stretch, and score how good each one is from 1 to 10:
+- 8 to 10: the best stuff, such as the main points, key arguments, demos, surprising facts, and the conclusion.
+- 1 to 7: everything else with substance, such as smaller points, examples, numbers, and reasons. Never drop one because it seems minor.
 Leave out the downtime: sponsor reads (all of them, from the first sentence to the last), channel plugs, "like and subscribe", greetings and sign-offs, waiting for something to load, filler, rambling, repeating a point already made, and tangents that go nowhere.
 Stretches must not overlap.`;
 
@@ -31,10 +33,10 @@ const SCHEMA = {
         properties: {
           start: { type: 'STRING' },
           end: { type: 'STRING' },
-          kind: { type: 'STRING', enum: ['highlight', 'play'] },
           label: { type: 'STRING', description: 'A few plain words saying what this part covers' },
+          score: { type: 'INTEGER', description: 'How good this part is, from 1 to 10' },
         },
-        required: ['start', 'end', 'kind', 'label'],
+        required: ['start', 'end', 'label', 'score'],
       },
     },
   },
@@ -52,12 +54,13 @@ const JSON_SCHEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['start', 'end', 'kind', 'label'],
+        required: ['start', 'end', 'label', 'score'],
         properties: {
           start: { type: 'string' },
           end: { type: 'string' },
-          kind: { type: 'string', enum: ['highlight', 'play'] },
           label: { type: 'string', description: 'A few plain words saying what this part covers' },
+          // No minimum/maximum: Claude's structured outputs don't support number limits.
+          score: { type: 'integer', description: 'How good this part is, from 1 to 10' },
         },
       },
     },
@@ -89,13 +92,22 @@ function clock(sec) {
   return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
 }
 
-// Sort, add the lead-in, and tidy the edges: merge same-kind parts that overlap or sit a blink apart
-// (a 1-second skip is just jarring), and never let two parts overlap.
+// Sort, add the lead-in, pick the highlights, and tidy the edges: merge same-kind parts that overlap or
+// sit a blink apart (a 1-second skip is just jarring), and never let two parts overlap.
 function cleanParts(raw) {
   const parts = raw
-    .map((p) => ({ start: Math.max(0, toSeconds(p.start) - LEAD_IN), end: toSeconds(p.end), kind: p.kind, label: p.label }))
+    .map((p) => ({ start: Math.max(0, toSeconds(p.start) - LEAD_IN), end: toSeconds(p.end), score: p.score, label: p.label }))
     .filter((p) => p.end > p.start)
     .sort((a, b) => a.start - b.start);
+  // Asked for "about a quarter", the AI marked 42-61% of a video as highlights. So it scores each part, and
+  // the best-scored parts become highlights until they fill a quarter of the video. The best one always does.
+  const budget = HIGHLIGHTS * Math.max(0, ...parts.map((p) => p.end));
+  let used = 0;
+  for (const p of [...parts].sort((a, b) => b.score - a.score)) {
+    const highlight = used === 0 || used + (p.end - p.start) <= budget;
+    p.kind = highlight ? 'highlight' : 'play';
+    if (highlight) used += p.end - p.start;
+  }
   const out = [];
   for (const p of parts) {
     const last = out[out.length - 1];
@@ -274,7 +286,7 @@ function needKey(message) {
 }
 
 async function getParts(videoId) {
-  const cacheKey = `parts2:${videoId}`;
+  const cacheKey = `parts3:${videoId}`;
   const cached = (await chrome.storage.local.get(cacheKey))[cacheKey];
   if (cached) return cached;
   const settings = await chrome.storage.local.get(['provider', 'apiKey', 'claudeKey', 'openaiKey']);
