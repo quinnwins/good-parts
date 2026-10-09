@@ -7,7 +7,7 @@ version=$(sed -n 's/.*"version": "\(.*\)".*/\1/p' manifest.json)
 out="${1:-$HOME/Desktop}/good-parts-$version.zip"
 tmp=$(mktemp -d)
 mkdir "$tmp/good-parts"
-cp manifest.json background.js captions.js prompt.js content.js content.css options.html options.js icon16.png icon48.png icon128.png "$tmp/good-parts/"
+cp manifest.json background.js captions.js prompt.js content.js content.css options.html options.js icon16.png icon48.png icon128.png LICENSE "$tmp/good-parts/"
 rm -f "$out"
 (cd "$tmp" && zip -qr "$out" good-parts)
 rm -rf "$tmp"
