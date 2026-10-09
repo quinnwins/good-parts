@@ -4,9 +4,10 @@ Watch YouTube videos in less time. The best parts play at normal speed, the rest
 
 ## Install
 
-1. Download the zip from [Releases](../../releases) and unzip it.
-2. Go to `chrome://extensions` and turn on **Developer mode**.
-3. Click **Load unpacked** and choose the `good-parts` folder.
+1. Download the zip from [Releases](../../releases) and double-click it to unzip.
+2. In Chrome, type `chrome://extensions` in the address bar and press Enter.
+3. Turn on **Developer mode** with the switch in the top-right corner.
+4. Click **Load unpacked** (top left) and choose the unzipped `good-parts` folder.
 
 ## Use
 
