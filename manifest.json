@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Good Parts",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Watch only the good parts of a YouTube video.",
   "permissions": [
     "storage"
@@ -35,7 +35,7 @@
       "css": [
         "content.css"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
   ],
   "icons": {

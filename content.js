@@ -251,6 +251,9 @@ async function readTranscript(videoId, every = 10) {
 async function switchCaptions(videoId) {
   const cc = document.querySelector('#movie_player .ytp-subtitles-button');
   if (!cc) return;
+  // Switched on before the video starts, captions never download, so wait for it to start (up to 10 s).
+  for (let i = 0; i < 40 && !(video()?.currentTime > 0) && !captionFiles[videoId]; i++) await sleep(250);
+  if (captionFiles[videoId]) return;
   const wasOn = cc.getAttribute('aria-pressed') === 'true';
   document.documentElement.classList.add('gp-reading');
   if (!wasOn) cc.click();
