@@ -441,6 +441,19 @@ function watchMinutes(short) {
   return Math.round((time('highlight') / base + time('play') / fastSpeed(base, short)) / 60);
 }
 
+// The extension's own mark (fast-forward to the next good part), drawn in the button's text colour.
+function goodPartsIcon() {
+  const ns = 'http://www.w3.org/2000/svg';
+  const svg = document.createElementNS(ns, 'svg');
+  svg.setAttribute('class', 'gp-icon');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  svg.setAttribute('aria-hidden', 'true');
+  const path = document.createElementNS(ns, 'path');
+  path.setAttribute('d', 'M2 5v14l8-7zM10 5v14l8-7zM18.5 5H21v14h-2.5z');
+  svg.appendChild(path);
+  return svg;
+}
+
 function ensureButton() {
   const right = document.querySelector('#movie_player .ytp-chrome-controls .ytp-right-controls');
   if (!right) return;
@@ -449,6 +462,7 @@ function ensureButton() {
   if (!btn) {
     btn = document.createElement('button');
     btn.className = 'gp-button';
+    btn.append(goodPartsIcon(), Object.assign(document.createElement('span'), { className: 'gp-label' }));
     btn.addEventListener('click', onButtonClick);
     right.before(btn); // Its own pill; YouTube's control pills have fixed widths and clip extra buttons.
   }
@@ -459,14 +473,16 @@ function ensureButton() {
     right.before(alt);
   }
   btn.hidden = !currentVideoId();
-  // On, both buttons name a speed for the rest and a length, so they read as two choices:
-  // "Good parts: 2x · 12 min" and "or 3x · 9 min".
+  // The mark stands for Good Parts. On, both buttons name a speed for the rest and a length, so they read
+  // as two choices: "2x · 12 min" and "or 3x · 9 min".
   const base = state.on ? state.baseRate : video()?.playbackRate || 1;
-  const label = state.busy ? 'Finding good parts…'
-    : state.on ? `Good parts: ${fastSpeed(base)}x · ${watchMinutes(shorter)} min`
+  const label = state.busy ? 'Finding…'
+    : state.on ? `${fastSpeed(base)}x · ${watchMinutes(shorter)} min`
     : ready() ? `Watch in ${watchMinutes(shorter)} min`
-    : 'Good parts';
-  if (btn.textContent !== label) btn.textContent = label;
+    : '';
+  const text = btn.querySelector('.gp-label');
+  if (text.textContent !== label) text.textContent = label;
+  btn.setAttribute('aria-label', label ? `Good Parts: ${label}` : 'Good Parts');
   btn.classList.toggle('gp-on', state.on);
   btn.classList.toggle('gp-ready', !state.on && !state.busy && ready());
   btn.title = state.on ? 'Back to the full video' : 'Watch the best parts, speed through the rest';

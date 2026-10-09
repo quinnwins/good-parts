@@ -1,6 +1,9 @@
 .gp-button {
   flex: 0 0 auto;
   align-self: center;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   height: 40px;
   margin-right: 8px;
   padding: 0 16px;
@@ -17,6 +20,8 @@
 /* Worked out and ready ("Watch in 14 min"): a gold outline, so it stands out before it's switched on. */
 .gp-button.gp-ready { box-shadow: inset 0 0 0 2px #ffc83d; }
 .gp-button[hidden] { display: none; }
+.gp-icon { width: 20px; height: 20px; fill: currentColor; flex: none; }
+.gp-label:empty { display: none; }
 
 .gp-toast {
   position: absolute;
