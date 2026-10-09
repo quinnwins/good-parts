@@ -23,6 +23,14 @@ Each stretch must be a complete thought: start at the line where it begins, and 
 
 ${lines}`;
 
+// Only for videos SponsorBlock hasn't marked yet, whose captions mention a sponsor (see findSponsors in content.js).
+const sponsorPrompt = (title, lines) => `Here is the transcript of the YouTube video "${title}". Each line starts with its timestamp.
+List every sponsor read: a stretch where the creator promotes a product or service for a company that paid for it, such as "this video is sponsored by", "thanks to ... for sponsoring", or a brand's discount code or link.
+Each one runs from its first sentence to its last, including the lead-in ("but first, a word from...") and the handoff back to the video. Start at the line where it begins, and end at the timestamp of the first line after it.
+Leave out the creator's own merch, courses, and channel plugs, and brands that are simply what the video is about. If there are no sponsor reads, return an empty list.
+
+${lines}`;
+
 const SCHEMA = {
   type: 'OBJECT',
   properties: {
@@ -67,5 +75,38 @@ const JSON_SCHEMA = {
   },
 };
 
+// The sponsor reads' answer format, in Gemini's spelling and in Claude and GPT's.
+const SPONSOR_SCHEMA = {
+  type: 'OBJECT',
+  properties: {
+    sponsors: {
+      type: 'ARRAY',
+      items: {
+        type: 'OBJECT',
+        properties: { start: { type: 'STRING' }, end: { type: 'STRING' } },
+        required: ['start', 'end'],
+      },
+    },
+  },
+  required: ['sponsors'],
+};
+
+const SPONSOR_JSON_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['sponsors'],
+  properties: {
+    sponsors: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['start', 'end'],
+        properties: { start: { type: 'string' }, end: { type: 'string' } },
+      },
+    },
+  },
+};
+
 // The server imports this file as a module, where the names above stay private, so it reads them here.
-globalThis.goodPartsPrompt = { FORMAT, transcriptPrompt, JSON_SCHEMA };
+globalThis.goodPartsPrompt = { FORMAT, transcriptPrompt, JSON_SCHEMA, sponsorPrompt, SPONSOR_JSON_SCHEMA };

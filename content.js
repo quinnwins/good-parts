@@ -10,6 +10,9 @@ const SKIPPED = 0.25; // Share of the video skipped at the least, weakest parts 
 const LONG_VIDEO = 8 * 60; // Only videos this long are worked out early: YouTube allows mid-video ads from 8 min, so talk videos get padded past it.
 const WORK_OUT_AFTER = 30; // Seconds watched before that happens.
 
+// Captions that say any of these may have a sponsor read, so they go to the AI when SponsorBlock has nothing.
+const SPONSOR_WORDS = /sponsor|brought to you by|made possible by|promo code|discount code|coupon code|use code|use my code|partner(ed|ing)? with|in partnership with|free trial|% off|percent off/i;
+
 // loading: the parts being worked out ({ id, quiet, promise }). openGap: a skipped stretch the viewer went
 // back to on purpose, which plays until the next part.
 let state = { videoId: null, parts: null, on: false, busy: false, markersFor: null, baseRate: 1, current: null, loading: null, openGap: null };
@@ -117,22 +120,23 @@ async function post(name, url, headers, body, signal) {
 }
 
 // Each call takes { text, title, lines } (a transcript prompt and what it's made of) or, Gemini only,
-// { videoId }, and returns the answer's JSON text.
-async function callGemini({ text, videoId }, key, signal) {
+// { videoId }, and returns the answer's JSON text. task: 'sponsors' asks for the sponsor reads instead of the parts.
+async function callGemini({ text, videoId, task }, key, signal) {
   const parts = videoId
     ? [{ fileData: { fileUri: `https://www.youtube.com/watch?v=${videoId}` } }, { text: VIDEO_PROMPT }]
     : [{ text }];
+  const schema = task === 'sponsors' ? SPONSOR_SCHEMA : SCHEMA;
   const data = await post('Gemini', 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent', { 'x-goog-api-key': key }, {
     contents: [{ parts }],
     // Low thinking answered in ~8 s instead of 20-60 s with the same picks in testing.
-    generationConfig: { thinkingConfig: { thinkingLevel: 'low' }, responseMimeType: 'application/json', responseSchema: SCHEMA },
+    generationConfig: { thinkingConfig: { thinkingLevel: 'low' }, responseMimeType: 'application/json', responseSchema: schema },
   }, signal);
   return (data.candidates?.[0]?.content?.parts || []).map((p) => p.text || '').join('');
 }
 
 // Raw HTTP like the other two: the extension has no build step to bundle Anthropic's SDK.
 // Low effort: ~21 s with the same picks as the default (~33 s).
-async function callClaude({ text, title, lines }, key, signal) {
+async function callClaude({ text, title, lines, task }, key, signal) {
   const data = key
     ? await post('Claude', 'https://api.anthropic.com/v1/messages', {
       'x-api-key': key,
@@ -141,20 +145,20 @@ async function callClaude({ text, title, lines }, key, signal) {
     }, {
       model: 'claude-haiku-5-5',
       max_tokens: 16000,
-      output_config: { effort: 'low', format: { type: 'json_schema', schema: JSON_SCHEMA } },
+      output_config: { effort: 'low', format: { type: 'json_schema', schema: task === 'sponsors' ? SPONSOR_JSON_SCHEMA : JSON_SCHEMA } },
       messages: [{ role: 'user', content: text }],
     }, signal)
-    : await post('Claude', FREE_CLAUDE, {}, { format: FORMAT, title, lines }, signal); // The server makes the same request.
+    : await post('Claude', FREE_CLAUDE, {}, { format: FORMAT, task, title, lines }, signal); // The server makes the same request.
   if (data.stop_reason === 'refusal') throw new FriendlyError('Claude declined this video. Try another AI in settings.');
   return (data.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
 }
 
 // Normal reasoning: ~30 s, but its highlights stuck to "about a quarter"; low reasoning marked over half the video.
-async function callOpenAI({ text }, key, signal) {
+async function callOpenAI({ text, task }, key, signal) {
   const data = await post('GPT', 'https://api.openai.com/v1/responses', { authorization: `Bearer ${key}` }, {
     model: 'gpt-6-luna',
     input: text,
-    text: { format: { type: 'json_schema', name: 'good_parts', schema: JSON_SCHEMA, strict: true } },
+    text: { format: { type: 'json_schema', name: 'good_parts', schema: task === 'sponsors' ? SPONSOR_JSON_SCHEMA : JSON_SCHEMA, strict: true } },
   }, signal);
   const content = (data.output || []).filter((o) => o.type === 'message').flatMap((o) => o.content || []);
   if (content.some((c) => c.type === 'refusal')) throw new FriendlyError('GPT declined this video. Try another AI in settings.');
@@ -169,18 +173,20 @@ const PROVIDERS = {
   openai: { name: 'GPT', keyName: 'openaiKey', call: callOpenAI },
 };
 
+function readParts(answer, name) {
+  const parts = cleanParts(answer.parts);
+  if (!parts.length) throw new FriendlyError(`${name} didn't find any parts to keep.`);
+  return parts;
+}
+
 // In testing about 1 in 7 Gemini video requests stalled or failed on Google's side, and some answers take 90+ s.
 // So if the first request errors or is slow, send a backup and use whichever answers first.
-async function askAI(provider, request, key) {
+// read turns the answer into what the caller needs: the parts unless told otherwise.
+async function askAI(provider, request, key, read = readParts) {
   const { name, call } = PROVIDERS[provider];
   const controller = new AbortController();
   const giveUp = setTimeout(() => controller.abort(), GIVE_UP_AFTER);
-  const ask = () =>
-    call(request, key, controller.signal).then((text) => {
-      const parts = cleanParts(JSON.parse(text).parts);
-      if (!parts.length) throw new FriendlyError(`${name} didn't find any parts to keep.`);
-      return parts;
-    });
+  const ask = () => call(request, key, controller.signal).then((text) => read(JSON.parse(text), name));
   const first = ask();
   const backup = new Promise((resolve, reject) => {
     const timer = setTimeout(resolve, BACKUP_AFTER);
@@ -210,8 +216,8 @@ window.addEventListener('message', (e) => {
   if (c) captionFiles[c.v] = c.text;
 });
 
-// Turn the player's caption file into "[m:ss] words" lines of about 10 seconds each.
-function captionLines(file) {
+// Turn the player's caption file into "[m:ss] words" lines of about `every` seconds each.
+function captionLines(file, every) {
   let events;
   try {
     events = JSON.parse(file).events || [];
@@ -223,25 +229,34 @@ function captionLines(file) {
   for (const ev of events) {
     const text = (ev.segs || []).map((s) => s.utf8).join('').replace(/\s+/g, ' ').trim();
     if (!text) continue;
-    if (!line || ev.tStartMs - line.start >= 10000) lines.push((line = { start: ev.tStartMs, words: [] }));
+    if (!line || ev.tStartMs - line.start >= every * 1000) lines.push((line = { start: ev.tStartMs, words: [] }));
     line.words.push(text);
   }
   return lines.length ? lines.map((l) => `[${clock(l.start / 1000)}] ${l.words.join(' ')}`).join('\n') : null;
 }
 
 // If the player hasn't downloaded captions yet, switch them on out of sight so it does, then switch
-// them back off. Returns null when a video has no captions.
-async function readTranscript(videoId) {
-  const cc = document.querySelector('#movie_player .ytp-subtitles-button');
-  if (!captionFiles[videoId] && cc) {
-    const wasOn = cc.getAttribute('aria-pressed') === 'true';
-    document.documentElement.classList.add('gp-reading');
-    if (!wasOn) cc.click();
-    for (let i = 0; i < 20 && !captionFiles[videoId]; i++) await sleep(250);
-    if (!wasOn && cc.getAttribute('aria-pressed') === 'true') cc.click();
-    document.documentElement.classList.remove('gp-reading');
+// them back off. Lines are about 10 seconds each unless asked otherwise. Returns null when a video has no captions.
+let reading = null; // { id, promise }: the parts and the sponsor check can both want captions, and only one may switch them.
+async function readTranscript(videoId, every = 10) {
+  if (!captionFiles[videoId] && reading?.id !== videoId) {
+    const promise = switchCaptions(videoId);
+    reading = { id: videoId, promise };
+    promise.finally(() => { if (reading?.promise === promise) reading = null; });
   }
-  return captionFiles[videoId] ? captionLines(captionFiles[videoId]) : null;
+  if (reading?.id === videoId) await reading.promise;
+  return captionFiles[videoId] ? captionLines(captionFiles[videoId], every) : null;
+}
+
+async function switchCaptions(videoId) {
+  const cc = document.querySelector('#movie_player .ytp-subtitles-button');
+  if (!cc) return;
+  const wasOn = cc.getAttribute('aria-pressed') === 'true';
+  document.documentElement.classList.add('gp-reading');
+  if (!wasOn) cc.click();
+  for (let i = 0; i < 20 && !captionFiles[videoId]; i++) await sleep(250);
+  if (!wasOn && cc.getAttribute('aria-pressed') === 'true') cc.click();
+  document.documentElement.classList.remove('gp-reading');
 }
 
 // A background run stops without a word where a click would show something or send the whole video to
@@ -250,12 +265,17 @@ class QuietStop extends Error {}
 
 const needKey = (message) => new FriendlyError(message, false, true);
 
+// The AI picked in settings (Claude unless changed) and every saved key.
+async function aiSettings() {
+  const settings = await chrome.storage.local.get(['provider', 'apiKey', 'claudeKey', 'openaiKey']);
+  return { settings, provider: PROVIDERS[settings.provider] ? settings.provider : 'claude' };
+}
+
 async function getParts(videoId, quiet) {
   const cacheKey = `parts4:${videoId}`;
   const cached = (await chrome.storage.local.get(cacheKey))[cacheKey];
   if (cached) return cached;
-  const settings = await chrome.storage.local.get(['provider', 'apiKey', 'claudeKey', 'openaiKey']);
-  const provider = PROVIDERS[settings.provider] ? settings.provider : 'claude';
+  const { settings, provider } = await aiSettings();
   const { name, keyName, free } = PROVIDERS[provider];
   if (!settings[keyName] && !free) throw needKey(`Add your ${name} key first.`);
   if (adShowing() && !quiet) toast('Good Parts will start after the ad.', GIVE_UP_AFTER);
@@ -300,7 +320,7 @@ function loadParts(id, quiet = false) {
 let watching = { id: null, seconds: 0, at: null };
 function noteWatching(v) {
   const id = currentVideoId();
-  if (!id || adShowing()) return;
+  if (!id) return;
   if (watching.id !== id) watching = { id, seconds: 0, at: null };
   const step = watching.at === null ? 0 : v.currentTime - watching.at;
   if (step > 0 && step < 2) watching.seconds += step; // Bigger steps are the viewer jumping ahead.
@@ -323,6 +343,88 @@ function offer() {
       ensureButton();
     },
   });
+}
+
+// ---------- Sponsors ----------
+
+// Sponsors are skipped on every video, with Good Parts on or off, unless switched off in settings.
+// null until the setting is read, so nothing is looked up for someone who switched it off.
+let skipSponsors = null;
+chrome.storage.local.get('skipSponsors').then((s) => { skipSponsors = s.skipSponsors !== false; });
+chrome.storage.onChanged.addListener((changes) => { if (changes.skipSponsors) skipSponsors = changes.skipSponsors.newValue !== false; });
+
+// The playing video's sponsor reads ({ start, end, watch }), empty until found. watch: the viewer chose to see it.
+let sponsors = { id: null, list: [] };
+
+// Overlapping or back-to-back stretches become one, so each sponsor is one skip and one message.
+function joinSponsors(list) {
+  const out = [];
+  for (const s of list.filter((s) => s.end > s.start).sort((a, b) => a.start - b.start)) {
+    const last = out[out.length - 1];
+    if (last && s.start <= last.end + 1) last.end = Math.max(last.end, s.end);
+    else out.push({ start: s.start, end: s.end });
+  }
+  return out;
+}
+
+const readSponsors = (answer) => joinSponsors(answer.sponsors.map((s) => ({ start: toSeconds(s.start), end: toSeconds(s.end) })));
+
+// Sponsor times viewers marked on SponsorBlock (sponsor.ajay.app). It's asked for every video whose hashed id
+// starts with the same 4 characters, so it never learns which one is playing. No answer counts as nothing marked.
+async function sponsorBlock(videoId) {
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(videoId)));
+  const prefix = [...hash.slice(0, 2)].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const res = await fetch(`https://sponsor.ajay.app/api/skipSegments/${prefix}`).catch(() => null);
+  if (!res?.ok) return []; // 404: nothing marked.
+  const marked = (await res.json()).find((v) => v.videoID === videoId)?.segments || [];
+  return joinSponsors(marked.map((s) => ({ start: s.segment[0], end: s.segment[1] })));
+}
+
+// SponsorBlock first: instant and free. Videos it hasn't marked yet (often new or small ones) fall back to
+// the captions: if they mention a sponsor, the AI finds where each read starts and ends.
+async function findSponsors(videoId) {
+  const marked = await sponsorBlock(videoId);
+  if (marked.length) return marked;
+  const cacheKey = `sponsors1:${videoId}`;
+  const cached = (await chrome.storage.local.get(cacheKey))[cacheKey];
+  if (cached) return cached;
+  const lines = await readTranscript(videoId, 3); // Short lines, so a skip starts and ends close to the read.
+  if (!lines) return [];
+  let found = [];
+  if (SPONSOR_WORDS.test(lines)) {
+    const { settings, provider } = await aiSettings();
+    const { keyName, free } = PROVIDERS[provider];
+    if (!settings[keyName] && !free) return [];
+    const title = document.title.replace(/ - YouTube$/, '');
+    found = await askAI(provider, { task: 'sponsors', text: sponsorPrompt(title, lines), title, lines }, settings[keyName], readSponsors);
+  }
+  await chrome.storage.local.set({ [cacheKey]: found });
+  return found;
+}
+
+// Called as the video plays (never during an ad): looks up each new video's sponsors once.
+function loadSponsors() {
+  const id = currentVideoId();
+  if (!skipSponsors || !id || sponsors.id === id) return;
+  const mine = (sponsors = { id, list: [] });
+  findSponsors(id)
+    .then((list) => { mine.list = list; })
+    .catch((err) => console.info('[Good Parts] sponsors not found:', err.message));
+}
+
+// The last half second counts as past the end, so landing a hair short of it can't skip again.
+const sponsorAt = (t) => sponsors.list.find((s) => t >= s.start && t < s.end - 0.5);
+
+function skipSponsor(v) {
+  const s = skipSponsors && sponsors.id === currentVideoId() && sponsorAt(v.currentTime);
+  if (!s || s.watch) return;
+  jump(v, s.end);
+  toast(`Skipped a sponsor (${howLong(s.end - s.start)})`, 4000, { label: 'Undo', run: () => watchSponsor(s) });
+}
+
+function watchSponsor(s) {
+  s.watch = true;
+  video().currentTime = s.start;
 }
 
 // ---------- UI ----------
@@ -452,6 +554,20 @@ function setSpeed(rate) {
 
 const howLong = (sec) => (sec < 90 ? `${Math.round(sec)} seconds` : `${Math.round(sec / 60)} min`);
 
+// Good Parts' own jumps, and the viewer's last click, tap or key press outside an ad (so Skip Ad doesn't count).
+// Together they tell onSeeking which moves were the viewer's, not Good Parts' or YouTube's (such as going back
+// to the video after an ad).
+let ownSeek = false;
+let lastInput = 0;
+for (const type of ['pointerdown', 'pointerup', 'keydown']) {
+  window.addEventListener(type, () => { if (!adShowing()) lastInput = Date.now(); }, true);
+}
+
+function jump(v, t) {
+  ownSeek = true;
+  v.currentTime = t;
+}
+
 // Skip downtime, speed through plays, and play highlights at the viewer's own speed. Speed only changes
 // when a new part starts, so a speed the viewer picks mid-part sticks until the next one.
 function follow() {
@@ -471,7 +587,7 @@ function follow() {
     const next = state.parts.find((p) => p.start > v.currentTime);
     if (next) {
       const from = v.currentTime;
-      v.currentTime = next.start;
+      jump(v, next.start);
       // Land in the next part here, so its own message can't replace this one and its Undo button.
       state.current = next;
       setSpeed(next.kind === 'play' ? fastSpeed(state.baseRate) : state.baseRate);
@@ -500,33 +616,42 @@ function watchSkipped(start, end) {
   follow();
 }
 
-// The viewer moved the video (dragged the bar, pressed an arrow key). If they landed in a skipped
-// stretch, they want to see it, so it plays instead of being skipped again. (Good Parts' own jumps
-// land inside a part, or in a stretch Undo opened, so they come out the same.)
+// The viewer moved the video (dragged the bar, pressed an arrow key, clicked a timestamp). If they landed
+// in a skipped stretch or a sponsor, they want to see it, so it plays instead of being skipped again.
 function onSeeking(e) {
-  if (!state.on || e.target !== video() || adShowing()) return;
-  const t = e.target.currentTime;
+  const v = e.target;
+  if (v !== video()) return;
+  const own = ownSeek;
+  ownSeek = false;
+  if (own || adShowing() || Date.now() - lastInput > 1000) return;
+  const t = v.currentTime;
+  const s = sponsorAt(t);
+  if (s) s.watch = true;
+  if (!state.on) return;
   const next = state.parts.find((p) => p.start > t);
-  state.openGap = partAt(t) ? null : { start: t, end: next ? next.start : e.target.duration };
+  state.openGap = partAt(t) ? null : { start: t, end: next ? next.start : v.duration };
 }
 
 function onTimeUpdate(e) {
-  if (e.target !== video()) return;
-  if (!state.on) {
-    noteWatching(e.target);
-    return;
-  }
+  const v = e.target;
+  if (v !== video()) return;
   if (adShowing()) {
     // Ads play at their own speed. Pick the right speed again once the video is back.
-    if (state.current) {
+    if (state.on && state.current) {
       setSpeed(state.baseRate);
       state.current = null;
       ensureButton();
     }
     return;
   }
-  drawMarkers();
-  follow();
+  loadSponsors();
+  if (state.on) {
+    drawMarkers();
+    follow();
+  } else {
+    noteWatching(v);
+  }
+  skipSponsor(v);
 }
 
 function summary() {
@@ -545,7 +670,7 @@ function turnOn() {
     return; // onTimeUpdate takes over once the ad ends.
   }
   // Start inside a part, so the next part's own message can't replace the summary below a moment later.
-  if (!partAt(v.currentTime)) v.currentTime = (state.parts.find((p) => p.start > v.currentTime) || state.parts[0]).start;
+  if (!partAt(v.currentTime)) jump(v, (state.parts.find((p) => p.start > v.currentTime) || state.parts[0]).start);
   follow();
   drawMarkers();
   v.play().catch(() => {});

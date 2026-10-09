@@ -7,7 +7,7 @@
 // Runs as the Cloudflare Worker "good-parts" on the owner's Cloudflare account.
 import '../prompt.js';
 
-const { FORMAT, transcriptPrompt, JSON_SCHEMA } = globalThis.goodPartsPrompt;
+const { FORMAT, transcriptPrompt, JSON_SCHEMA, sponsorPrompt, SPONSOR_JSON_SCHEMA } = globalThis.goodPartsPrompt;
 // About 90k tokens, around 5 hours of captions. Haiku's lower price applies up to 100k.
 const MAX_CHARS = 350000;
 const DAILY_LIMIT = 30; // New videos per address per day (UTC). Saved ones don't count.
@@ -26,18 +26,22 @@ export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') return new Response(null, { headers: CORS });
     if (request.method !== 'POST') return reply(405, { error: 'Good Parts only' });
-    const { format, title, lines } = (await request.json().catch(() => null)) || {};
+    const { format, task, title, lines } = (await request.json().catch(() => null)) || {};
+    // task 'sponsors': just the sponsor reads, for videos SponsorBlock hasn't marked. Anything else: the good parts.
+    const sponsors = task === 'sponsors';
     if (typeof title !== 'string' || typeof lines !== 'string' || !lines.trim() || title.length + lines.length > MAX_CHARS) {
       return reply(400, { error: 'Good Parts only' });
     }
     // The extension shows 409 as "out of date": its copy expects an answer format this server no longer gives.
     if (format !== FORMAT) return reply(409, { error: 'Old Good Parts' });
     // Saved by captions, not title: YouTube puts a notification count like "(3)" in some viewers' titles.
-    const key = `${FORMAT}:${await sha256(lines)}`;
+    const key = `${sponsors ? 'sponsors' : FORMAT}:${await sha256(lines)}`;
     const saved = await env.DB.prepare('SELECT body FROM answers WHERE key = ?').bind(key).first('body');
     if (saved) return send(200, saved);
+    // Sponsor checks run on their own, so they're counted apart and never use up anyone's good parts.
+    const ip = request.headers.get('cf-connecting-ip');
     const used = await env.DB.prepare('INSERT INTO uses (ip, day, n) VALUES (?, ?, 1) ON CONFLICT (ip, day) DO UPDATE SET n = n + 1 RETURNING n')
-      .bind(request.headers.get('cf-connecting-ip'), new Date().toISOString().slice(0, 10))
+      .bind(sponsors ? `sponsors ${ip}` : ip, new Date().toISOString().slice(0, 10))
       .first('n');
     if (used > DAILY_LIMIT) return reply(429, { error: 'Daily limit reached' });
     const res = await fetch('https://api.anthropic.com/v1/messages', {
@@ -46,8 +50,8 @@ export default {
       body: JSON.stringify({
         model: 'claude-haiku-5-5',
         max_tokens: 16000,
-        output_config: { effort: 'low', format: { type: 'json_schema', schema: JSON_SCHEMA } },
-        messages: [{ role: 'user', content: transcriptPrompt(title, lines) }],
+        output_config: { effort: 'low', format: { type: 'json_schema', schema: sponsors ? SPONSOR_JSON_SCHEMA : JSON_SCHEMA } },
+        messages: [{ role: 'user', content: (sponsors ? sponsorPrompt : transcriptPrompt)(title, lines) }],
       }),
     });
     const data = await res.json().catch(() => ({}));
