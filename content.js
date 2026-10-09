@@ -459,11 +459,11 @@ function ensureButton() {
     right.before(alt);
   }
   btn.hidden = !currentVideoId();
-  // While a part is sped up, the button shows the speed, so the jump doesn't look like a glitch.
-  const fast = state.on && state.current?.kind === 'play';
+  // On, both buttons name a speed for the rest and a length, so they read as two choices:
+  // "Good parts: 2x · 12 min" and "or 3x · 9 min".
+  const base = state.on ? state.baseRate : video()?.playbackRate || 1;
   const label = state.busy ? 'Finding good parts…'
-    : fast ? `Good parts: ${video().playbackRate}x`
-    : state.on ? 'Good parts: on'
+    : state.on ? `Good parts: ${fastSpeed(base)}x · ${watchMinutes(shorter)} min`
     : ready() ? `Watch in ${watchMinutes(shorter)} min`
     : 'Good parts';
   if (btn.textContent !== label) btn.textContent = label;
@@ -473,9 +473,9 @@ function ensureButton() {
   // The other length, one click away. Hidden when both come out the same (a viewer already at 3x).
   const other = !btn.hidden && !state.busy && ready() ? watchMinutes(!shorter) : null;
   alt.hidden = other === null || other === watchMinutes(shorter);
-  const altLabel = `or ${other} min`;
+  const altLabel = `or ${fastSpeed(base, !shorter)}x · ${other} min`;
   if (!alt.hidden && alt.textContent !== altLabel) alt.textContent = altLabel;
-  alt.title = `The rest at ${fastSpeed(state.on ? state.baseRate : video()?.playbackRate || 1, !shorter)}x`;
+  alt.title = `The rest at ${fastSpeed(base, !shorter)}x`;
 }
 
 let toastTimer;
