@@ -10,7 +10,7 @@ A Chrome extension that lets you watch the best parts of a YouTube video at norm
 
 ## Use
 
-Open a YouTube video and press **⏭ Good parts** in the player's bottom bar. It shows how long the cut takes, for example **⏭ 2x · 11 min**. The button next to it switches between that and a shorter cut, where the rest plays at 3x. Press the gold button again to go back to the full video.
+Open a YouTube video and press **⏭ Good parts** in the player's bottom bar. It shows how fast the rest plays and how long the cut takes, for example **⏭ 2x · 11 min**. The arrow next to it picks another speed (1.5x to 3x, each with its length) or **Just skip sponsors**, which plays the full video with only the sponsors skipped. Your speed is remembered. Press the gold button again to go back to the full video.
 
 On videos 8 minutes or longer, Good Parts works out the cut after you've watched 30 seconds, so the button can say **Watch in 11 min** before you press it.
 

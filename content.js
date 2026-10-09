@@ -338,7 +338,7 @@ function noteWatching(v) {
 // YouTube hides its controls while a video plays, so the button's "Watch in 14 min" may go unseen.
 // Say it once in a message, with a button to start.
 function offer() {
-  toast(`Good Parts: ${watchMinutes(shorter)} min instead of ${Math.round(video().duration / 60)}`, 8000, {
+  toast(`Good Parts: ${watchMinutes()} min instead of ${Math.round(video().duration / 60)}`, 8000, {
     label: 'Watch',
     run: () => {
       if (state.on || !ready()) return;
@@ -434,11 +434,14 @@ function watchSponsor(s) {
 
 const ready = () => !!state.parts && state.videoId === currentVideoId();
 
-// Minutes to watch with the rest at 2x (or 1.5x the viewer's own speed), or, short, with the rest at 3x.
-function watchMinutes(short) {
-  const base = state.on ? state.baseRate : video()?.playbackRate || 1;
+// The speed the viewer watches at: what they had when Good Parts started, or what they have now.
+const viewerSpeed = () => (state.on ? state.baseRate : video()?.playbackRate || 1);
+
+// Minutes to watch with the rest at the picked speed, or at the one given.
+function watchMinutes(rest = speed) {
+  const base = viewerSpeed();
   const time = (kind) => state.parts.filter((p) => p.kind === kind).reduce((sum, p) => sum + (p.end - p.start), 0);
-  return Math.round((time('highlight') / base + time('play') / fastSpeed(base, short)) / 60);
+  return Math.round((time('highlight') / base + time('play') / fastSpeed(base, rest)) / 60);
 }
 
 // The extension's own mark (fast-forward to the next good part), drawn in the button's text colour.
@@ -451,6 +454,13 @@ function goodPartsIcon() {
   const path = document.createElementNS(ns, 'path');
   path.setAttribute('d', 'M2 5v14l8-7zM10 5v14l8-7zM18.5 5H21v14h-2.5z');
   svg.appendChild(path);
+  return svg;
+}
+
+// An arrow pointing up, to the menu it opens.
+function upArrow() {
+  const svg = goodPartsIcon();
+  svg.querySelector('path').setAttribute('d', 'M7.4 15.4 12 10.8l4.6 4.6L18 14l-6-6-6 6z');
   return svg;
 }
 
@@ -468,7 +478,7 @@ function ensureButton() {
   const right = document.querySelector('#movie_player .ytp-chrome-controls .ytp-right-controls');
   if (!right) return;
   let btn = right.parentElement.querySelector(':scope > .gp-button');
-  let alt = right.parentElement.querySelector(':scope > .gp-length');
+  let more = right.parentElement.querySelector(':scope > .gp-more');
   if (!btn) {
     btn = document.createElement('button');
     btn.className = 'gp-button';
@@ -476,46 +486,119 @@ function ensureButton() {
     btn.addEventListener('click', onButtonClick);
     right.before(btn); // Its own pill; YouTube's control pills have fixed widths and clip extra buttons.
   }
-  if (!alt) {
-    alt = document.createElement('button');
-    alt.className = 'gp-length';
-    alt.addEventListener('click', onLengthClick);
-    right.before(alt);
+  if (!more) {
+    more = document.createElement('button');
+    more.className = 'gp-more';
+    more.title = 'Pick a speed';
+    more.setAttribute('aria-label', more.title);
+    more.setAttribute('aria-haspopup', 'menu');
+    more.setAttribute('aria-expanded', 'false');
+    more.append(upArrow());
+    more.addEventListener('click', onMoreClick);
+    right.before(more);
   }
   btn.hidden = !currentVideoId();
-  // The mark stands for Good Parts. On, both buttons name a speed for the rest and a length, so they read
-  // as two choices: "2x · 12 min" and "or 3x · 9 min".
-  const base = state.on ? state.baseRate : video()?.playbackRate || 1;
-  const minutes = ready() ? watchMinutes(shorter) : null;
+  // The mark stands for Good Parts. On, it names the speed for the rest and the length: "2x · 12 min".
+  const minutes = ready() ? watchMinutes() : null;
   const label = state.busy ? 'Finding…'
-    : state.on ? `${fastSpeed(base)}x · ${minutes} min`
+    : state.on ? `${fastSpeed(viewerSpeed())}x · ${minutes} min`
     : ready() ? `Watch in ${minutes} min`
     : 'Good parts';
   btn.setAttribute('aria-label', `Good Parts: ${label}`);
   btn.classList.toggle('gp-on', state.on);
   btn.classList.toggle('gp-ready', !state.on && !state.busy && ready());
   btn.title = state.on ? 'Back to the full video' : 'Watch the best parts, speed through the rest';
-  // The other length, one click away. Hidden when both come out the same (a viewer already at 3x).
-  const other = !btn.hidden && !state.busy && ready() ? watchMinutes(!shorter) : null;
-  const both = other !== null && other !== minutes;
+  // The arrow next to it opens the other speeds, once there's something to time.
+  const canPick = !btn.hidden && !state.busy && ready();
   // In a narrow player the words would cover YouTube's own volume and time, so they go a step at a time:
-  // the speeds, then the other length, then everything but the mark.
+  // the speed, then the arrow, then everything but the mark.
   const short = minutes === null || state.busy ? '' : `${minutes} min`;
   const steps = [
-    { label, alt: both && `or ${fastSpeed(base, !shorter)}x · ${other} min` },
-    { label: short, alt: both && `or ${other} min` },
-    { label: short, alt: false },
-    { label: '', alt: false },
+    { label, more: canPick },
+    { label: short, more: canPick },
+    { label: short, more: false },
+    { label: '', more: false },
   ];
   const text = btn.querySelector('.gp-label');
   for (const step of steps) {
     if (text.textContent !== step.label) text.textContent = step.label;
-    alt.hidden = !step.alt;
-    if (step.alt && alt.textContent !== step.alt) alt.textContent = step.alt;
+    more.hidden = !step.more;
     if (btn.hidden || youtubeControlsFit(right.parentElement)) break;
   }
-  alt.title = `The rest at ${fastSpeed(base, !shorter)}x`;
+  if (more.hidden) closeMenu();
 }
+
+// The menu above the arrow: each speed for the rest with its length, then the full video with only the
+// sponsors skipped, which is Good Parts off. A tick marks how it plays now.
+function openMenu() {
+  const more = document.querySelector('#movie_player .gp-more');
+  const bar = more?.closest('.ytp-chrome-bottom');
+  if (!bar) return;
+  const menu = document.createElement('div');
+  menu.className = 'gp-menu';
+  menu.setAttribute('role', 'menu');
+  const base = viewerSpeed();
+  const now = state.on && fastSpeed(base);
+  // Speeds at or below the viewer's own all come out as their own, so they show once.
+  const rates = new Map(SPEEDS.map((s) => [fastSpeed(base, s), s]));
+  for (const [rate, s] of rates) menu.append(menuItem(`${rate}x`, `${watchMinutes(s)} min`, rate === now, () => pickSpeed(s)));
+  menu.append(Object.assign(document.createElement('div'), { className: 'gp-menu-line' }));
+  const v = video();
+  const sponsorTime = skipSponsors && sponsors.id === currentVideoId() ? sponsors.list.reduce((sum, s) => sum + (s.end - s.start), 0) : 0;
+  const full = `${Math.round((v.duration - sponsorTime) / base / 60)} min`;
+  menu.append(menuItem(skipSponsors ? 'Just skip sponsors' : 'Full video', full, !state.on, pickFull));
+  bar.append(menu);
+  // In a small player the menu tightens up, and scrolls if it still doesn't fit.
+  const room = bar.getBoundingClientRect().top - player().getBoundingClientRect().top - 20;
+  menu.classList.toggle('gp-tight', menu.offsetHeight > room);
+  menu.style.maxHeight = `${room}px`;
+  menu.style.right = `${bar.getBoundingClientRect().right - more.getBoundingClientRect().right}px`;
+  more.setAttribute('aria-expanded', 'true');
+}
+
+function menuItem(name, minutes, ticked, run) {
+  const item = document.createElement('button');
+  item.className = 'gp-menu-item';
+  item.setAttribute('role', 'menuitemradio');
+  item.setAttribute('aria-checked', String(ticked));
+  item.append(
+    Object.assign(document.createElement('span'), { className: 'gp-menu-name', textContent: name }),
+    Object.assign(document.createElement('span'), { className: 'gp-menu-time', textContent: minutes }),
+  );
+  item.addEventListener('click', (e) => {
+    e.stopPropagation();
+    closeMenu();
+    run();
+  });
+  return item;
+}
+
+function closeMenu() {
+  document.querySelector('.gp-menu')?.remove();
+  document.querySelector('.gp-more')?.setAttribute('aria-expanded', 'false');
+}
+
+function onMoreClick(e) {
+  e.stopPropagation();
+  if (document.querySelector('.gp-menu')) closeMenu();
+  else openMenu();
+}
+
+// A click anywhere else, or Escape, closes the menu. A click on the video only closes it, as with YouTube's
+// own menus, instead of also pausing.
+let swallowClick = false;
+document.addEventListener('pointerdown', (e) => {
+  swallowClick = false;
+  if (!document.querySelector('.gp-menu') || e.target.closest?.('.gp-menu, .gp-more')) return;
+  closeMenu();
+  swallowClick = !!e.target.closest?.('#movie_player') && !e.target.closest('.ytp-chrome-bottom');
+}, true);
+document.addEventListener('click', (e) => {
+  if (!swallowClick) return;
+  swallowClick = false;
+  e.stopPropagation();
+}, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeMenu(); }, true);
 
 let toastTimer;
 let toastFor; // The video a message is about, so switching videos can clear it.
@@ -579,14 +662,15 @@ function partAt(t) {
   return state.parts.find((p) => t >= p.start - 0.5 && t < p.end);
 }
 
-// The plays between highlights go at 2x (3x felt too fast), or the shorter length's 3x (the small button next
-// to Good Parts; that choice is remembered). Never slower than the viewer's own speed.
-// (The old settings checkbox saved "faster"; it's ignored, so everyone starts at 2x.)
-let shorter = false;
-chrome.storage.local.get('shorter').then((s) => { shorter = !!s.shorter; });
-chrome.storage.onChanged.addListener((changes) => { if (changes.shorter) shorter = !!changes.shorter.newValue; });
-function fastSpeed(base, short = shorter) {
-  return Math.max(base, short ? 3 : 2);
+// The plays between highlights go at the speed picked in the menu next to Good Parts, 2x unless changed
+// (3x felt too fast to start with). The pick is remembered. Never slower than the viewer's own speed.
+// (Older versions saved "faster" and "shorter"; they're ignored, so everyone starts at 2x.)
+const SPEEDS = [1.5, 2, 2.5, 3];
+let speed = 2;
+chrome.storage.local.get('speed').then((s) => { speed = s.speed || 2; });
+chrome.storage.onChanged.addListener((changes) => { if (changes.speed) speed = changes.speed.newValue; });
+function fastSpeed(base, rest = speed) {
+  return Math.max(base, rest);
 }
 
 function setSpeed(rate) {
@@ -698,7 +782,7 @@ function onTimeUpdate(e) {
 
 function summary() {
   const v = video();
-  return `About ${watchMinutes(shorter)} min instead of ${Math.round(v.duration / 60)}. Best parts play as usual, the rest at ${fastSpeed(state.baseRate)}x, filler skipped.`;
+  return `About ${watchMinutes()} min instead of ${Math.round(v.duration / 60)}. Best parts play as usual, the rest at ${fastSpeed(state.baseRate)}x, filler skipped.`;
 }
 
 function turnOn() {
@@ -708,7 +792,7 @@ function turnOn() {
   const v = video();
   state.baseRate = v.playbackRate;
   if (adShowing()) {
-    toast(`About ${watchMinutes(shorter)} min to watch. Starting after the ad.`, 4000);
+    toast(`About ${watchMinutes()} min to watch. Starting after the ad.`, 4000);
     return; // onTimeUpdate takes over once the ad ends.
   }
   // Start inside a part, so the next part's own message can't replace the summary below a moment later.
@@ -720,6 +804,7 @@ function turnOn() {
 }
 
 function turnOff() {
+  closeMenu();
   if (state.on) setSpeed(state.baseRate);
   state.on = false;
   state.current = null;
@@ -757,12 +842,10 @@ async function onButtonClick(e) {
   ensureButton();
 }
 
-// The small button: switch to the other length (and start, if Good Parts is off). The choice is remembered.
-function onLengthClick(e) {
-  e.stopPropagation();
-  if (state.busy || !ready()) return;
-  shorter = !shorter;
-  chrome.storage.local.set({ shorter });
+// A speed from the menu: play the rest at it (starting Good Parts, if it's off) and remember it.
+function pickSpeed(s) {
+  speed = s;
+  chrome.storage.local.set({ speed });
   if (!state.on) {
     turnOn();
   } else {
@@ -771,6 +854,13 @@ function onLengthClick(e) {
     toast(summary(), 4000);
   }
   ensureButton();
+}
+
+// "Just skip sponsors" from the menu: the full video, which is Good Parts off. The gold button shows that it's
+// off, but not that sponsors are still skipped.
+function pickFull() {
+  turnOff();
+  if (skipSponsors) toast('Full video, sponsors skipped.', 3000);
 }
 
 function onNavigate() {

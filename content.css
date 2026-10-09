@@ -64,23 +64,61 @@
 .gp-highlight { top: 0; bottom: 0; background: #ffc83d; }
 .gp-play { top: 1px; bottom: 1px; background: rgba(255, 255, 255, 0.55); }
 
-/* The other length ("11 min"), next to the Good Parts button: smaller, so the main button stays the one to press. */
-.gp-length {
+/* The arrow next to the Good Parts button, which opens the speeds: smaller, so the main button stays the one to press. */
+.gp-more {
   flex: 0 0 auto;
   align-self: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
   height: 32px;
-  margin-right: 8px;
-  padding: 0 12px;
+  margin: 0 8px 0 -4px;
+  padding: 0;
   border: 1px solid rgba(255, 255, 255, 0.35);
   border-radius: 16px;
   background: rgba(0, 0, 0, 0.3);
   color: #fff;
-  font: 500 13px/30px Roboto, Arial, sans-serif;
+  cursor: pointer;
+}
+.gp-more:hover, .gp-more[aria-expanded="true"] { background: rgba(0, 0, 0, 0.5); }
+.gp-more[hidden] { display: none; }
+.gp-more .gp-icon { width: 22px; height: 22px; }
+
+/* The speeds menu, above the arrow and the progress bar, dark like YouTube's own settings menu. */
+.gp-menu {
+  position: absolute;
+  bottom: 100%;
+  z-index: 71;
+  min-width: 200px;
+  margin-bottom: 12px;
+  padding: 8px 0;
+  overflow-y: auto;
+  border-radius: 12px;
+  background: rgba(28, 28, 28, 0.92);
+}
+.gp-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 40px;
+  padding: 0 16px 0 12px;
+  border: 0;
+  background: none;
+  color: #fff;
+  font: 500 14px Roboto, Arial, sans-serif;
   white-space: nowrap;
   cursor: pointer;
 }
-.gp-length:hover { background: rgba(0, 0, 0, 0.5); }
-.gp-length[hidden] { display: none; }
+.gp-menu-item:hover { background: rgba(255, 255, 255, 0.1); }
+/* A gold tick beside how it plays now: a shape, not just a colour. */
+.gp-menu-item::before { content: ""; width: 28px; flex: none; color: #ffc83d; font-size: 16px; text-align: left; }
+.gp-menu-item[aria-checked="true"]::before { content: "\2713"; }
+.gp-menu-time { margin-left: auto; padding-left: 24px; color: rgba(255, 255, 255, 0.7); }
+.gp-menu-line { height: 1px; margin: 8px 0; background: rgba(255, 255, 255, 0.2); }
+.gp-menu.gp-tight { padding: 4px 0; }
+.gp-tight .gp-menu-item { height: 32px; }
+.gp-tight .gp-menu-line { margin: 4px 0; }
 
 /* Undo in a message: gold on dark for contrast, and clickable although the message itself isn't. */
 .gp-toast-action {
