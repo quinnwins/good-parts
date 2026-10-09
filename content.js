@@ -454,6 +454,16 @@ function goodPartsIcon() {
   return svg;
 }
 
+// True when YouTube's left-hand controls (play, volume, time) are whole, not squeezed by Good Parts' buttons.
+function youtubeControlsFit(bar) {
+  const left = bar.querySelector(':scope > .ytp-left-controls');
+  if (!left) return true;
+  const edge = left.getBoundingClientRect().right;
+  const spills = [...left.children].some((c) => c.offsetWidth && c.getBoundingClientRect().right > edge + 1);
+  const time = left.querySelector('.ytp-time-display');
+  return !spills && !(time && time.scrollWidth > time.clientWidth + 1);
+}
+
 function ensureButton() {
   const right = document.querySelector('#movie_player .ytp-chrome-controls .ytp-right-controls');
   if (!right) return;
@@ -476,21 +486,34 @@ function ensureButton() {
   // The mark stands for Good Parts. On, both buttons name a speed for the rest and a length, so they read
   // as two choices: "2x · 12 min" and "or 3x · 9 min".
   const base = state.on ? state.baseRate : video()?.playbackRate || 1;
+  const minutes = ready() ? watchMinutes(shorter) : null;
   const label = state.busy ? 'Finding…'
-    : state.on ? `${fastSpeed(base)}x · ${watchMinutes(shorter)} min`
-    : ready() ? `Watch in ${watchMinutes(shorter)} min`
-    : '';
-  const text = btn.querySelector('.gp-label');
-  if (text.textContent !== label) text.textContent = label;
-  btn.setAttribute('aria-label', label ? `Good Parts: ${label}` : 'Good Parts');
+    : state.on ? `${fastSpeed(base)}x · ${minutes} min`
+    : ready() ? `Watch in ${minutes} min`
+    : 'Good parts';
+  btn.setAttribute('aria-label', `Good Parts: ${label}`);
   btn.classList.toggle('gp-on', state.on);
   btn.classList.toggle('gp-ready', !state.on && !state.busy && ready());
   btn.title = state.on ? 'Back to the full video' : 'Watch the best parts, speed through the rest';
   // The other length, one click away. Hidden when both come out the same (a viewer already at 3x).
   const other = !btn.hidden && !state.busy && ready() ? watchMinutes(!shorter) : null;
-  alt.hidden = other === null || other === watchMinutes(shorter);
-  const altLabel = `or ${fastSpeed(base, !shorter)}x · ${other} min`;
-  if (!alt.hidden && alt.textContent !== altLabel) alt.textContent = altLabel;
+  const both = other !== null && other !== minutes;
+  // In a narrow player the words would cover YouTube's own volume and time, so they go a step at a time:
+  // the speeds, then the other length, then everything but the mark.
+  const short = minutes === null || state.busy ? '' : `${minutes} min`;
+  const steps = [
+    { label, alt: both && `or ${fastSpeed(base, !shorter)}x · ${other} min` },
+    { label: short, alt: both && `or ${other} min` },
+    { label: short, alt: false },
+    { label: '', alt: false },
+  ];
+  const text = btn.querySelector('.gp-label');
+  for (const step of steps) {
+    if (text.textContent !== step.label) text.textContent = step.label;
+    alt.hidden = !step.alt;
+    if (step.alt && alt.textContent !== step.alt) alt.textContent = step.alt;
+    if (btn.hidden || youtubeControlsFit(right.parentElement)) break;
+  }
   alt.title = `The rest at ${fastSpeed(base, !shorter)}x`;
 }
 
