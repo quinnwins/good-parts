@@ -1,0 +1,23 @@
+# Push a tag like v1.7.4 (matching manifest.json's version) and this builds the zip with share.sh and
+# publishes it as a GitHub release, so friends download it from the Releases page.
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check the tag matches manifest.json
+        run: |
+          version=$(sed -n 's/.*"version": "\(.*\)".*/\1/p' manifest.json)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then echo "Tag $GITHUB_REF_NAME doesn't match manifest.json version $version"; exit 1; fi
+      - name: Build the zip
+        run: ./share.sh "$RUNNER_TEMP"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/good-parts-*.zip --title "Good Parts ${GITHUB_REF_NAME#v}" --generate-notes
