@@ -31,3 +31,7 @@ On videos 8 minutes or longer, Good Parts works out the cut after you've watched
 - `share.sh` builds the zip from the extension's own files, so key files never go in it.
 - Pushing a tag that matches `manifest.json`'s version (for example `v1.7.4`) builds the zip and publishes it as a release.
 - `server/` is the Cloudflare Worker behind the free Claude. Deploy it with `npx wrangler deploy` in that folder.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
